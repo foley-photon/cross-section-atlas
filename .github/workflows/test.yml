@@ -1,0 +1,41 @@
+# Every test, on each push and pull request: the Node tests (engine with hand-worked values, the page check, the
+# site's data checks on the fixture data, the repository itself) and the Python tests of the build and release
+# scripts (a synthetic archive; no network, no data downloads).
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Node tests
+        run: node --test "tests/*.test.mjs"
+      - name: The check the site runs, on this repository's page (no data here)
+        run: node scripts/selftest.mjs site
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      # two of the build tests run the page's engine and the site's data checks in Node
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Python tests
+        run: python -m unittest discover -s tests -v

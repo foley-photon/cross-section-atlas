@@ -1,0 +1,15 @@
+# Python and Node leftovers
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+
+# the data files are not published in this repository (README.md, "Why the data are not here"). Build them for a local
+# preview into data/ (python scripts/build_data.py <clean> data; node scripts/serve.mjs --data data), never into
+# site/data/: that path is ignored only as a guard, and tests/repo.test.mjs fails while it exists.
+/data/
+/site/data/
+
+.DS_Store
+Thumbs.db

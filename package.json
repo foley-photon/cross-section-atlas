@@ -1,0 +1,19 @@
+{
+  "name": "cross-section-atlas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gas-phase UV, visible and VUV absorption cross sections of about 1000 molecules, overlaid, with values at laser lines and photolysis per pulse",
+  "type": "module",
+  "license": "MIT",
+  "author": "Casey D. Foley (https://cdfoley.com)",
+  "homepage": "https://cdfoley.com/beta/cross-sections/",
+  "repository": "github:foley-photon/cross-section-atlas",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "selftest": "node scripts/selftest.mjs site",
+    "serve": "node scripts/serve.mjs"
+  }
+}

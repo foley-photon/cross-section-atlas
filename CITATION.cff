@@ -1,0 +1,165 @@
+cff-version: 1.2.0
+message: >-
+  If you use the Absorption Cross-Section Atlas, please cite it as below, for
+  the arithmetic only (interpolation, laser-line averages, unit conversion,
+  Beer-Lambert absorption, photolysis per pulse). The cross sections are the
+  work of the authors of each measurement: cite the original paper named with
+  each dataset, and the compilation it came through (listed here).
+title: Absorption Cross-Section Atlas
+abstract: >-
+  A browser tool for gas-phase UV, visible and VUV absorption cross sections of
+  about 1000 molecules, from the MPI-Mainz UV/VIS Spectral Atlas (2013
+  snapshot), NCAR TUV-x, the Leiden photodissociation and photoionization
+  database, IUP Bremen and the Harvard-Smithsonian CfA: datasets overlaid on
+  wavelength, wavenumber or photon-energy axes in eleven units, values at laser
+  lines with line-width averaging and temperature interpolation, Beer-Lambert
+  absorption and the fraction photolyzed by a laser pulse. The data are served
+  by cdfoley.com and are not part of the repository.
+type: software
+authors:
+  - family-names: Foley
+    given-names: Casey D.
+    website: "https://cdfoley.com"
+version: "1.0.0"
+date-released: "2026-11-11"
+license: MIT
+repository-code: "https://github.com/foley-photon/cross-section-atlas"
+url: "https://cdfoley.com/beta/cross-sections/"
+keywords:
+  - absorption cross section
+  - UV-visible spectroscopy
+  - vacuum ultraviolet
+  - photolysis
+  - Beer-Lambert law
+  - laser photochemistry
+  - atmospheric chemistry
+preferred-citation:
+  type: software
+  title: Absorption Cross-Section Atlas
+  authors:
+    - family-names: Foley
+      given-names: Casey D.
+      website: "https://cdfoley.com"
+  version: "1.0.0"
+  date-released: "2026-11-11"
+  url: "https://cdfoley.com/beta/cross-sections/"
+  repository-code: "https://github.com/foley-photon/cross-section-atlas"
+references:
+  - type: article
+    title: The MPI-Mainz UV/VIS Spectral Atlas of Gaseous Molecules of Atmospheric Interest
+    authors:
+      - family-names: Keller-Rudek
+        given-names: Hannelore
+      - family-names: Moortgat
+        given-names: Geert K.
+      - family-names: Sander
+        given-names: Rolf
+      - family-names: Sörensen
+        given-names: Rüdiger
+    journal: Earth System Science Data
+    volume: 5
+    start: 365
+    end: 373
+    year: 2013
+    doi: "10.5194/essd-5-365-2013"
+  - type: data
+    title: The MPI-Mainz UV/VIS Spectral Atlas of Gaseous Molecules 2013-06-24
+    authors:
+      - family-names: Keller-Rudek
+        given-names: Hannelore
+      - family-names: Moortgat
+        given-names: Geert K.
+      - family-names: Sander
+        given-names: Rolf
+      - family-names: Sörensen
+        given-names: Rüdiger
+    publisher:
+      name: Zenodo
+    year: 2013
+    license: CC-BY-4.0
+    doi: "10.5281/zenodo.6951"
+  - type: software
+    title: NCAR/tuv-x
+    authors:
+      - family-names: Dawson
+        given-names: Matt
+      - family-names: Dendukuri
+        given-names: Aditya
+      - family-names: Fisher
+        given-names: Ward
+      - family-names: Shores
+        given-names: Kyle
+      - family-names: Sun
+        given-names: Jian
+      - family-names: Walters
+        given-names: Stacy
+      - family-names: Thind
+        given-names: Montek
+    version: "0.17.0"
+    year: 2025
+    publisher:
+      name: Zenodo
+    license: Apache-2.0
+    doi: "10.5281/zenodo.7126039"
+    repository-code: "https://github.com/NCAR/tuv-x"
+  - type: article
+    title: Photodissociation and photoionisation of atoms and molecules of astrophysical interest
+    authors:
+      - family-names: Heays
+        given-names: A. N.
+      - family-names: Bosman
+        given-names: A. D.
+      - family-names: van Dishoeck
+        given-names: E. F.
+    journal: Astronomy & Astrophysics
+    volume: 602
+    start: A105
+    year: 2017
+    doi: "10.1051/0004-6361/201628742"
+  - type: article
+    title: Recommendation of a consensus value of the ozone absorption cross-section at 253.65 nm based on a literature review
+    authors:
+      - family-names: Hodges
+        given-names: J. T.
+      - family-names: Viallon
+        given-names: J.
+      - family-names: Brewer
+        given-names: P. J.
+      - family-names: Drouin
+        given-names: B. J.
+      - family-names: Gorshelev
+        given-names: V.
+      - family-names: Janssen
+        given-names: C.
+      - family-names: Lee
+        given-names: S.
+      - family-names: Possolo
+        given-names: A.
+      - family-names: Smith
+        given-names: M. A. H.
+      - family-names: Walden
+        given-names: J.
+      - family-names: Wielgosz
+        given-names: R. I.
+    journal: Metrologia
+    volume: 56
+    issue: "3"
+    start: "034001"
+    year: 2019
+    doi: "10.1088/1681-7575/ab0bdd"
+  - type: article
+    title: "CODATA Recommended Values of the Fundamental Physical Constants: 2022"
+    authors:
+      - family-names: Mohr
+        given-names: Peter J.
+      - family-names: Newell
+        given-names: David B.
+      - family-names: Taylor
+        given-names: Barry N.
+      - family-names: Tiesinga
+        given-names: Eite
+    journal: Reviews of Modern Physics
+    volume: 97
+    start: "025002"
+    year: 2025
+    doi: "10.1103/RevModPhys.97.025002"
