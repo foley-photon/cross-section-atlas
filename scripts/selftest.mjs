@@ -333,6 +333,7 @@ export function bootPage(siteDir = SITE, dataDir = path.join(siteDir, 'data'), q
 }
 
 async function bootChild(modDir, dataDir, htmlPath, query) {
+    let line = '';
     const problems = []; const fail = (what, err) => problems.push(`${what}: ${err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : err}`);
     process.on('unhandledRejection', (err) => fail('unhandled rejection', err));
     process.on('uncaughtException', (err) => fail('uncaught exception', err));
@@ -407,12 +408,14 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
         }
         const st = g.__xsec ? g.__xsec.state : {};
         const summary = g.__xsec ? `${st.k}: ${st.on.length} dataset(s) shown, ${draws.length} draw(s)` : '';
-        process.stdout.write(`${JSON.stringify({ ok: !problems.length, problems: [...new Set(problems)], summary, first, last: snap() })}\n`);
+        line = (`${JSON.stringify({ ok: !problems.length, problems: [...new Set(problems)], summary, first, last: snap() })}\n`);
     } catch (err) {
         fail('boot', err);
-        process.stdout.write(`${JSON.stringify({ ok: false, problems, summary: '' })}\n`);
+        line = (`${JSON.stringify({ ok: false, problems, summary: '' })}\n`);
     }
-    process.exit(0);
+    // On Linux, stdout to a pipe is written asynchronously, so exiting before the write finishes cuts the line short
+    // and the parent cannot read it. Exit only once the whole line is written.
+    process.stdout.write(line, () => process.exit(0));
 }
 
 /** Everything the site checks, for one site folder: { page, engine, data, boot, why } with why empty when it passes. */
