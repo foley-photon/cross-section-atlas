@@ -1,6 +1,6 @@
 {
   "name": "cross-section-atlas",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Gas-phase UV, visible and VUV absorption cross sections of about 1000 molecules, overlaid, with values at laser lines and photolysis per pulse",
   "type": "module",

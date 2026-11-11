@@ -4,6 +4,10 @@ Versions follow semantic versioning. Releases are made by hand (`scripts/release
 `scripts/finish-release.sh`, README.md "Making a release"); cdfoley.com copies the latest release once a day. A new build of the data files is not a release of this repository: the data live only on
 the site (README.md).
 
+## 1.0.3 - 2026-11-11
+
+- Page description, social-card text and structured data say "five public collections" instead of "five open datasets", matching the introduction: three of the five collections state no license.
+
 ## 1.0.2 - 2026-11-11
 
 - Release test checks the current version's notes without assuming it is the first release. The v1.0.1 tag was never released; this release carries its boot-check fix too.
