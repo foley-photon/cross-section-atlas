@@ -4,6 +4,10 @@ Versions follow semantic versioning. Releases are made by hand (`scripts/release
 `scripts/finish-release.sh`, README.md "Making a release"); cdfoley.com copies the latest release once a day. A new build of the data files is not a release of this repository: the data live only on
 the site (README.md).
 
+## 1.0.2 - 2026-11-11
+
+- Release test checks the current version's notes without assuming it is the first release. The v1.0.1 tag was never released; this release carries its boot-check fix too.
+
 ## 1.0.1 - 2026-11-11
 
 - The site's daily copy now passes on Linux: the self-test's boot check waits for its result line to be written before the check process exits. On Linux, output to a pipe is written asynchronously, so exiting early cut the line short and the check reported that the boot did not finish. The page and the data are unchanged.

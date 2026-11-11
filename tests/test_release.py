@@ -44,10 +44,18 @@ class Release(unittest.TestCase):
         with self.assertRaises(SystemExit):
             R.notes(self.tmp, '9.9.9')
 
+    def notes_cli(self, v):
+        return subprocess.run([sys.executable, str(ROOT / 'scripts' / 'release.py'), '--root', str(self.tmp), 'notes', v],
+                              capture_output=True, text=True, encoding='utf-8')
+
     def test_notes_of_the_current_version(self):
-        v = '.'.join(map(str, self.v))
-        r = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'release.py'), '--root', str(self.tmp), 'notes', v],
-                           capture_output=True, text=True, encoding='utf-8')
+        r = self.notes_cli('.'.join(map(str, self.v)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.strip(), 'the current version has notes')
+        self.assertFalse(any(l.startswith('## ') for l in r.stdout.splitlines()), 'the notes stop at the next version')
+
+    def test_notes_of_the_first_release(self):
+        r = self.notes_cli('1.0.0')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(r.stdout.startswith('First release as its own repository.'))
 
