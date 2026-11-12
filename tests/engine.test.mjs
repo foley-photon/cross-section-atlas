@@ -1,5 +1,6 @@
 // The engine (site/js/xsec.js): unit factors, photon conversions, interpolation, laser-line averages, temperature
-// interpolation, thinning, Beer–Lambert and photolysis per pulse. Expected values are worked out by hand in the comments,
+// interpolation, thinning, Beer–Lambert and photolysis per pulse, reference labels and the rows of "Who absorbs here?".
+// Expected values are worked out by hand in the comments,
 // with CODATA 2022 constants (N_A, h, c, k and e are exact).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -363,4 +364,238 @@ test('line labels that would pile up are left out', () => {
     assert.deepEqual(X.keepLabels([]), []);
     // every preset line has a rank, and no other wavelength does
     assert.deepEqual([...X.LINE_RANK].sort((a, b) => a - b), X.LASER_LINES.map((L) => L.nm));
+});
+
+test('reference labels: first surname, "et al." past two authors, the file label or the title without authors', () => {
+    assert.equal(X.authorsShort('A. Serdyuchenko, V. Gorshelev, M. Weber, W. Chehade, and J. P. Burrows'), 'Serdyuchenko et al.');
+    assert.equal(X.authorsShort('L.T Molina and M.J. Molina'), 'Molina and Molina');
+    assert.equal(X.authorsShort('A.M. Bass'), 'Bass');
+    assert.equal(X.authorsShort('S.P. Sander et al.'), 'Sander et al.');
+    assert.equal(X.authorsShort('G. von Helden'), 'Helden', 'the last word of the name');
+    assert.equal(X.authorsShort(''), '');
+    assert.equal(X.refLabel({ a: 'S.P. Sander, J. Abbatt, J. R. Barker', y: 2011, t: 'Chemical Kinetics' }), 'Sander et al. (2011)');
+    assert.equal(X.refLabel({ a: '', y: 2026, lab: 'Xx steps', c: 'a citation' }), 'Xx steps (2026)');
+    assert.equal(X.refLabel({ a: '', y: '', t: 'A title that runs on for rather more than fifty characters in all' }), 'A title that runs on for rather more than fifty ch…', 'the first 50 characters');
+    assert.equal(X.refLabel({ a: '', y: '' }), 'unknown');
+    assert.equal(X.refLabel(null), 'unknown');
+});
+
+// A small who.json and coarse.json in the layout scripts/build_data.py writes: sets are [species key, label, T, source, flags]
+// (1 recommended, 2 upper limits, 4 electron energy loss, 8 a list of band maxima) and, for a file of one isotopologue,
+// its name; a row at a line is [file number, σ], [file number, σ, λ of the single point] or [file number, σ, null, the gap
+// in nm between the points it is interpolated between]; a coarse run is [file number, first bin, [round(100 log10 σ) …]]
+// with bins 2 nm wide, and a 1 after the values where the points lie more than 5 nm apart.
+const WHO = {
+    lines: ['193.3', '248.4'],
+    sets: { '00001': ['O3', 'Sander et al. (2011)', [293, 298], 'mainz2013', 1], '00002': ['O2', 'Yoshino et al. (1992)', 300, 'cfa', 0],
+        '00003': ['CF3OH', 'Molina (1996)', 298, 'mainz2013', 2], '00004': ['HO2', 'Paukert (1972)', null, 'mainz2013', 0] },
+    at: { '193.3': [['00004', 3.9e-18, 193], ['00001', 4.2763e-19], ['00003', 1e-21], ['00002', 6.7918e-22]], '248.4': [['00001', 1.0785e-17]] },
+};
+const COARSE = { bin: 2, sets: WHO.sets, runs: [['00002', 96, [-2100, -2130]], ['00001', 96, [-1837, -1840, -1850]], ['00003', 90, [-2000]]] };
+
+test('who absorbs here: the rows at a preset line, strongest first as the build stored them', () => {
+    assert.equal(X.lineKey(193.3), '193.3');
+    assert.equal(X.lineKey(266), '266');
+    assert.equal(X.lineKey(193), null, '193 nm is not the 193.3 nm preset');
+    const rows = X.whoAtLine(WHO, '193.3');
+    assert.deepEqual(rows.map((r) => r.k), ['HO2', 'O3', 'CF3OH', 'O2']);
+    assert.deepEqual(rows[0], { k: 'HO2', f: '00004', sigma: 3.9e-18, label: 'Paukert (1972)', T: null, src: 'mainz2013', rec: false, ul: false, ee: false, peaks: false, iso: '', nm: 193.3, at: 193, gap: null, wide: false, band: null, approx: false });
+    assert.deepEqual([rows[1].rec, rows[1].ul, rows[1].at, rows[1].T], [true, false, null, [293, 298]]);
+    assert.deepEqual([rows[2].rec, rows[2].ul], [false, true], 'flag 2 is an upper limit');
+    assert.deepEqual(X.whoAtLine(WHO, '266'), [], 'a line the file does not have');
+    assert.deepEqual(X.whoAtLine(null, '193.3'), []);
+    assert.deepEqual(X.whoAtLine({ sets: {}, at: { '193.3': [['00009', 1e-20]] } }, '193.3'), [], 'a row whose dataset is not named is left out');
+    // what makes a row a weak one: electron energy loss (4) across a 29.5 nm gap, band maxima (8), one isotopologue
+    const weak = X.whoAtLine({ sets: { '00001': ['H2O', 'Tan et al. (1978)', 298, 'mainz2013', 4], '00002': ['RbI', 'Davidovits and Brodhead (1967)', 1007, 'mainz2013', 8], '00003': ['NH3', 'Liang et al. (2007)', 300, 'mainz2013', 0, '15NH3'] },
+        at: { '266': [['00002', 6e-17, 265], ['00003', 9.3e-18], ['00001', 2.1e-18, null, 29.5]] } }, '266');
+    assert.deepEqual(weak.map((r) => [r.k, r.ee, r.peaks, r.iso, r.at, r.gap, r.wide]), [['RbI', false, true, '', 265, null, false], ['NH3', false, false, '15NH3', null, null, false], ['H2O', true, false, '', null, 29.5, true]]);
+});
+
+test('a list of band maxima is read point by point at a laser line, never interpolated', () => {
+    const d = [[241, 5e-17], [265, 6e-17], [330, 2e-17]];
+    const peaks = { id: 'mainz2013:RbI_DavidovitsBrodhead(1967)_1007K_241,265,330nm(max)', np: 3, n0: 3 };
+    for (const tag of ['max', 'max,min', 'min,max', 'sh,max', 'max,sol', 'peaks-1cm-1', 'band peaks,rec', 'band heads']) assert.equal(X.isPeakList({ id: `mainz2013:Xx_A(2000)_298K_241,265nm(${tag})` }), true, tag);
+    for (const tag of ['rec', 'sol', 'smoo', '2nm', 'e,e', 'maximal']) assert.equal(X.isPeakList({ id: `mainz2013:Xx_A(2000)_298K_240-270nm(${tag})` }), false, tag);
+    assert.equal(X.isPeakList(null), false);
+    // 248.4 nm lies between two maxima: no value, and the nearest listed point is named
+    assert.deepEqual(X.tableValue(peaks, d, 248.4), { sigma: null, covered: 0, coarse: false, at: 241, full: false, thinned: false });
+    assert.deepEqual(X.tableValue(peaks, d, 266), { sigma: 6e-17, covered: 1, coarse: false, at: 265, full: false, thinned: false });
+    // the same three points without the tag are a spectrum
+    near(X.tableValue({ id: 'mainz2013:RbI_A(1967)_1007K_241-330nm', np: 3, n0: 3 }, d, 248.4).sigma, 5e-17 + (1e-17 * 7.4) / 24, 1e-12);
+});
+
+test('who absorbs here: any wavelength from the coarse bins', () => {
+    // 193.3 nm is in bin floor(193.3 / 2) = 96, 192 to 194 nm: O3 10^-18.37 = 4.266e-19 and O2 10^-21 = 1e-21
+    const rows = X.whoCoarse(COARSE, 193.3);
+    assert.deepEqual(rows.map((r) => r.k), ['O3', 'O2']);
+    near(rows[0].sigma, 4.2658e-19, 1e-4);
+    near(rows[1].sigma, 1e-21, 1e-12);
+    assert.deepEqual([rows[0].approx, rows[0].lo, rows[0].hi], [true, 192, 194]);
+    // 195 nm is in bin 97: the second value of each run
+    near(X.whoCoarse(COARSE, 195)[0].sigma, 10 ** -18.4, 1e-12);
+    // bin 98 (196 to 198 nm): the O2 run has ended
+    assert.deepEqual(X.whoCoarse(COARSE, 197).map((r) => r.k), ['O3']);
+    assert.deepEqual(X.whoCoarse(COARSE, 181).map((r) => [r.k, r.ul]), [['CF3OH', true]]);
+    assert.deepEqual(X.whoCoarse(COARSE, 500), []);
+    assert.deepEqual(X.whoCoarse(null, 193.3), []);
+    assert.deepEqual(X.whoCoarse(COARSE, NaN), []);
+    // a run whose points lie more than 5 nm apart says so, and a null (below the floor in the full spectrum) is no row
+    const gaps = { bin: 2, sets: WHO.sets, runs: [['00002', 96, [-2100, null], 1], ['00001', 96, [-1837, -1840]]] };
+    assert.deepEqual(X.whoCoarse(gaps, 193).map((r) => [r.k, r.wide]), [['O3', false], ['O2', true]]);
+    assert.deepEqual(X.whoCoarse(gaps, 195).map((r) => r.k), ['O3']);
+});
+
+test('who absorbs here: the air view keeps the gases of air and names the ones without data', () => {
+    assert.deepEqual([...X.AIR_GASES], ['N2', 'O2', 'H2O', 'CO2', 'CH4', 'H2', 'N2O', 'CO', 'O3', 'NO2', 'NO', 'SO2', 'NH3']);
+    const rows = X.whoAtLine(WHO, '193.3');
+    const air = X.whoView(rows, true);
+    assert.deepEqual(air.rows.map((r) => r.k), ['O3', 'O2'], 'in the order of the full list');
+    assert.deepEqual(air.missing, ['N2', 'H2O', 'CO2', 'CH4', 'H2', 'N2O', 'CO', 'NO2', 'NO', 'SO2', 'NH3']);
+    const all = X.whoView(rows, false);
+    assert.equal(all.rows, rows);
+    assert.deepEqual(all.missing, []);
+});
+
+/* ── Who absorbs here, in air ─────────────────────────────────────────── */
+test('the air of the air view: 1 atm, 296 K, and water vapor from the relative humidity', () => {
+    assert.deepEqual({ ...X.AIR }, { p: 101325, T: 296, rh: 50 });
+    // n = 101 325 Pa / (1.380 649e-23 J/K × 296 K) = 2.479 372e25 m⁻³ = 2.479 372e19 cm⁻³
+    near(X.density(X.AIR.p, X.AIR.T), 2.4793716e19, 1e-7);
+    // Antoine, NIST WebBook, 273 to 303 K: log10(p/bar) = 5.40221 − 1838.675/(296 − 31.737) = 5.40221 − 6.957746 = −1.555536,
+    // so p = 0.0278268 bar = 2782.68 Pa
+    near(X.waterSaturation(296), 2782.68, 1e-6);
+    assert.equal(X.waterSaturation(310), null, 'outside the 273 to 303 K of the fit');
+    assert.equal(X.waterSaturation(270), null);
+    // 50 %: 0.5 × 2782.6806 / 101 325 = 0.013 731 46; saturated: 0.027 462 92; dry: 0
+    near(X.waterFraction(50), 0.01373146, 1e-6);
+    near(X.waterFraction(100), 0.02746292, 1e-6);
+    assert.equal(X.waterFraction(0), 0);
+    near(X.waterFraction(), 0.01373146, 1e-6, 'the default humidity is 50 %');
+    assert.equal(X.waterFraction(101), null);
+    assert.equal(X.waterFraction(-1), null);
+});
+
+test('mole fractions in air: dry air from the 1976 Standard Atmosphere and NOAA, scaled by 1 − x of water', () => {
+    // every gas of the air view but water has a dry-air share, from a source the page names
+    assert.deepEqual(Object.keys(X.AIR_DRY).sort(), X.AIR_GASES.filter((k) => k !== 'H2O').sort());
+    for (const [k, [x, s]] of Object.entries(X.AIR_DRY)) { assert.ok(x > 0 && x < 1, k); assert.ok(X.AIR_SOURCES[s], `${k}: ${s}`); }
+    // U.S. Standard Atmosphere 1976, Table 3: N2 0.78084, O2 0.209476, Ar 0.00934, H2 0.0000005
+    assert.deepEqual([X.AIR_DRY.N2[0], X.AIR_DRY.O2[0], X.AIR_ARGON, X.AIR_DRY.H2[0]], [0.78084, 0.209476, 0.00934, 0.5e-6]);
+    // NOAA global monthly means: CO2 426.10 ppm (July 2026), CH4 1934.57 ppb and N2O 339.86 ppb (June 2026)
+    near(X.AIR_DRY.CO2[0], 426.10e-6, 1e-12); near(X.AIR_DRY.CH4[0], 1934.57e-9, 1e-12); near(X.AIR_DRY.N2O[0], 339.86e-9, 1e-12);
+    // U.S. Standard Atmosphere 1976, Table 15, ppb: CO 190, O3 40, NO2 1, NO 0.5, SO2 1, NH3 4
+    assert.deepEqual(['CO', 'O3', 'NO2', 'NO', 'SO2', 'NH3'].map((k) => +(X.AIR_DRY[k][0] * 1e9).toPrecision(6)), [190, 40, 1, 0.5, 1, 4]);
+    // with argon the dry-air shares add up to 1.000085 (the 1976 table had 314 ppm of CO2; they are not renormalized)
+    near(X.AIR_ARGON + Object.values(X.AIR_DRY).reduce((a, v) => a + v[0], 0), 1.000085, 1e-6);
+    assert.equal(X.airFraction('N2', 0), 0.78084, 'dry air');
+    // at 50 %: O2 0.209476 × (1 − 0.013 731 46) = 0.206 599 6; O3 40e-9 × 0.986 268 54 = 3.945 074e-8
+    near(X.airFraction('O2', 50), 0.2065996, 1e-6);
+    near(X.airFraction('O3'), 3.945074e-8, 1e-6);
+    near(X.airFraction('H2O', 50), 0.01373146, 1e-6);
+    assert.equal(X.airFraction('Ar', 50), null, 'argon has no cross sections in the collections and no row');
+    assert.equal(X.airFraction('CF3OH', 50), null);
+    assert.equal(X.airFraction('O2', 120), null);
+});
+
+const airRow = (k, sigma, more = {}) => ({ k, f: '00001', sigma, label: 'a', T: 298, src: 'x', rec: false, ul: false, ee: false, peaks: false, iso: '', at: null, gap: null, wide: false, approx: false, ...more });
+
+test('who absorbs here, in air: α = σ × mole fraction × n, largest first, with the 1/e length', () => {
+    // dry air, n = 2.479 372e19 cm⁻³. O2: 2e-24 × 0.209476 × n = 1.038 74e-5 cm⁻¹ = 1.038 74e-3 m⁻¹, 1/α = 962.71 m.
+    // O3: 1e-17 × 40e-9 × n = 9.917 49e-6 cm⁻¹ = 9.917 49e-4 m⁻¹, 1/α = 1008.3 m. The larger σ is the smaller α.
+    const A = X.airAbsorption([airRow('O3', 1e-17), airRow('O2', 2e-24)], 0);
+    assert.deepEqual(A.rows.map((r) => r.k), ['O2', 'O3']);
+    near(A.n, 2.4793716e19, 1e-7); assert.equal(A.water, 0);
+    near(A.rows[0].alpha, 1.038738e-3, 1e-6); near(A.rows[0].L, 962.707, 1e-6); assert.equal(A.rows[0].x, 0.209476);
+    near(A.rows[1].alpha, 9.917486e-4, 1e-6); near(A.rows[1].L, 1008.320, 1e-6);
+    // total 2.030 486e-3 m⁻¹, 1/e length 492.493 m; O3 is within a factor of two of O2, so the two are a tie
+    near(A.total, 2.030486e-3, 1e-6); near(A.L, 492.493, 1e-6);
+    assert.deepEqual([A.top.k, A.tie.k, A.rough, A.weakShare, A.limits.length], ['O2', 'O3', false, 0, 0]);
+    near(A.firmTotal, A.total, 1e-12);
+    // at 50 % humidity every dry-air share is 1.373 % smaller, and water has a share of its own
+    const B = X.airAbsorption([airRow('O2', 2e-24), airRow('H2O', 1e-21)], 50);
+    near(B.rows.find((r) => r.k === 'O2').alpha, 1.038738e-3 * 0.98626854, 1e-6);
+    // H2O: 1e-21 × 0.013 731 46 × n × 100 = 3.404 54e-2 m⁻¹, the first row; O2 is far below half of it, so no tie
+    near(B.rows[0].alpha, 3.404539e-2, 1e-6); assert.equal(B.rows[0].k, 'H2O'); assert.equal(B.tie, null);
+    // in dry air water stays in the list with α = 0 and no length
+    const dry = X.airAbsorption([airRow('H2O', 1e-21), airRow('O2', 2e-24)], 0);
+    assert.deepEqual(dry.rows.map((r) => [r.k, r.alpha > 0, r.L === null]), [['O2', true, false], ['H2O', false, true]]);
+    // a gas that is not a gas of air has no share and no row; a humidity outside 0 to 100 % gives no rows at all
+    assert.deepEqual(X.airAbsorption([airRow('CF3OH', 1e-18), airRow('O2', 2e-24)], 0).rows.map((r) => r.k), ['O2']);
+    assert.deepEqual(X.airAbsorption([airRow('O2', 2e-24)], 150).rows, []);
+    const none = X.airAbsorption([], 50);
+    assert.deepEqual([none.total, none.L, none.top, none.tie, none.rough], [0, null, null, null, false]);
+});
+
+test('who absorbs here, in air: a flagged value is never part of a firm total', () => {
+    // an upper limit is listed and left out of the sum: SO2 ≤ 1e-16 would give 1e-16 × 1e-9 × n × 100 = 2.479e-4 m⁻¹
+    const ul = X.airAbsorption([airRow('SO2', 1e-16, { ul: true }), airRow('O2', 2e-24)], 0);
+    assert.deepEqual([ul.rows.map((r) => r.k), ul.sum.map((r) => r.k), ul.limits.map((r) => r.k)], [['O2', 'SO2'], ['O2'], ['SO2']]);
+    near(ul.total, 1.038738e-3, 1e-6); near(ul.limits[0].alpha, 2.479372e-4, 1e-6);
+    assert.equal(ul.rough, false);
+    // a small flagged row (CO2 across a gap: 4e-25 × 426.10e-6 × n × 100 = 4.2258e-7 m⁻¹, 0.04 % of the sum) leaves the total firm
+    const small = X.airAbsorption([airRow('O2', 2e-24), airRow('CO2', 4e-25, { gap: 36.3, wide: true })], 0);
+    assert.equal(small.rows[1].weak, true); assert.equal(small.rough, false);
+    near(small.weakShare, 4.2258e-7 / (1.038738e-3 + 4.2258e-7), 1e-4);
+    // a flagged row at the top makes it rough, and firmTotal is what is left without it: CO2 at one wavelength and 2073 K,
+    // 1.5e-21 × 426.10e-6 × n × 100 = 1.584 69e-3 m⁻¹, over O2 at 1.6e-25 × 0.209476 × n × 100 = 8.3099e-5 m⁻¹
+    const weak = X.airAbsorption([airRow('CO2', 1.5e-21, { at: 355, T: 2073 }), airRow('O2', 1.6e-25)], 0);
+    assert.deepEqual([weak.top.k, weak.top.weak, weak.rough, weak.tie], ['CO2', true, true, null]);
+    near(weak.total, 1.58469e-3 + 8.3099e-5, 1e-5); near(weak.firmTotal, 8.3099e-5, 1e-5); near(weak.weakShare, 0.950175, 1e-4);
+    // a flagged row that carries a tenth of the sum or more, below a firm top: rough
+    const tenth = X.airAbsorption([airRow('O2', 2e-24), airRow('O3', 2e-18, { T: 220 })], 0);   // O3: 1.9835e-4 m⁻¹, 16 % of 1.2371e-3
+    assert.deepEqual([tenth.top.k, tenth.tie, tenth.rough], ['O2', null, true]);
+    // 2 nm means are never firm
+    assert.equal(X.airAbsorption([airRow('O2', 2e-24, { approx: true })], 0).rough, true);
+    // the notes that make a row weak, in the words of the Note column
+    assert.deepEqual(X.whoNotes(airRow('O2', 1)), []);
+    assert.deepEqual(X.whoNotes(airRow('CO2', 1, { ul: true, gap: 10, wide: true })), ['upper limit', 'interpolated across 10 nm']);
+    assert.deepEqual(X.whoNotes(airRow('CO2', 1, { at: 355, T: 2073 })), ['measured at 355 nm only', 'at 2073 K, not room temperature']);
+    assert.deepEqual(X.whoNotes(airRow('RbI', 1, { at: 265, peaks: true, T: [200, 240] })), ['a band maximum listed at 265 nm, not a spectrum', 'at 200–240 K, not room temperature']);
+    assert.deepEqual(X.whoNotes(airRow('H2', 1, { ee: true, wide: true, T: null })), ['electron energy loss, low resolution', 'points more than 5 nm apart here']);
+    assert.deepEqual([X.tempText(null), X.tempText(298), X.tempText([293, 298])], ['T not given', '298 K', '293–298 K']);
+});
+
+test('who absorbs here, in air: a value in a structured spectrum is flagged, and an unconfirmed one stays out of the sum', () => {
+    // who.json carries the spread of σ within 0.25 nm of the line as a fifth number; the row says so in its note
+    const who = { sets: { '00001': ['O2', 'a', 300, 'x', 0], '00002': ['H2O', 'b', 298, 'x', 0], '00003': ['O3', 'c', 298, 'x', 0] },
+        at: { '193.3': [['00002', 1.95e-21], ['00001', 6.7918e-22, null, null, 63]], '248.4': [['00003', 1.079e-17], ['00001', 1.984e-24]] } };
+    const rows = X.whoAtLine(who, '193.3');
+    assert.deepEqual(rows.map((r) => [r.k, r.nm, r.band]), [['H2O', 193.3, null], ['O2', 193.3, 63]]);
+    assert.deepEqual(X.whoNotes(rows[1]), ['structured here: σ spans a factor of 63 within ±0.25 nm']);
+    assert.deepEqual(X.whoNotes({ ...rows[1], band: 10000 }), ['structured here: σ spans a factor of over 10 000 within ±0.25 nm']);
+    // 193.3 nm at 50 % humidity: O2 6.7918e-22 × 0.2065996 × n × 100 = 0.347 90 m⁻¹, H2O 1.95e-21 × 0.01373146 × n × 100
+    // = 0.066 389 m⁻¹. O2 leads, it is flagged, so the total is rough and firmTotal is water alone
+    const A = X.airAbsorption(rows, 50);
+    assert.deepEqual([A.top.k, A.top.weak, A.rough, A.tie, A.left.length], ['O2', true, true, null, 0]);
+    near(A.top.alpha, 0.347900, 1e-5); near(A.firmTotal, 0.0663885, 1e-5); near(A.weakShare, 0.83975, 1e-4);
+    // O2 above 245 nm: listed, flagged, last in the order of α, and left out of the sum, so ozone alone is the total
+    const kr = X.whoAtLine(who, '248.4');
+    assert.equal(X.whoDoubt(kr[1]).k, 'O2'); assert.equal(X.whoDoubt(kr[0]), null); assert.equal(X.whoDoubt(rows[1]), null);
+    assert.match(X.whoNotes(kr[1])[0], /^not a firm value: above 245 nm/);
+    const B = X.airAbsorption(kr, 50);
+    assert.deepEqual([B.rows.map((r) => r.k), B.sum.map((r) => r.k), B.left.map((r) => r.k), B.top.k, B.tie, B.rough], [['O3', 'O2'], ['O3'], ['O2'], 'O3', null, false]);
+    // O3: 1.079e-17 × 3.945074e-8 × n × 100 = 1.055 40e-3 m⁻¹; the O2 value would have given 1.984e-24 × 0.2065996 × n × 100 = 1.016 28e-3
+    near(B.total, 1.055403e-3, 1e-6); near(B.left[0].alpha, 1.016279e-3, 1e-6); near(B.firmTotal, B.total, 1e-12);
+    // an unconfirmed value with a larger α than every firm row still comes last and is not the top
+    const C = X.airAbsorption([{ ...kr[1], sigma: 1e-22 }, kr[0]], 50);
+    assert.deepEqual([C.rows.map((r) => r.k), C.top.k], [['O3', 'O2'], 'O3']);
+    // between the lines the rule goes by the lower edge of the 2 nm bin: 244 to 246 nm is in, 246 to 248 nm is out
+    const coarse = { bin: 2, sets: who.sets, runs: [['00001', 122, [-2400, -2380]]] };
+    assert.deepEqual([X.whoDoubt(X.whoCoarse(coarse, 245.5)[0]), X.whoDoubt(X.whoCoarse(coarse, 246.5)[0]).above], [null, 245]);
+    assert.equal(X.airAbsorption(X.whoCoarse(coarse, 246.5), 50).sum.length, 0);
+    // an upper limit of such a gas is an upper limit: listed with ≤, in limits, not in left
+    const ul = X.airAbsorption([{ ...kr[1], ul: true }], 50);
+    assert.deepEqual([ul.limits.length, ul.left.length], [1, 0]);
+});
+
+test('mole fractions and path lengths as the page writes them', () => {
+    assert.deepEqual([0.2065996, 0.0137315, 420.2e-6, 1.908e-6, 3.94507e-8, 4.931e-10, 2e-13].map((x) => X.fractionText(x)),
+        ['20.7 %', '1.37 %', '420 ppm', '1.91 ppm', '39.5 ppb', '493 ppt', '0.2 ppt']);
+    assert.equal(X.fractionText(0.78084, 3), '78.08 %');
+    assert.equal(X.fractionText(null), '—');
+    assert.equal(X.fractionText(0), '0', 'water in dry air');
+    assert.deepEqual([482.67, 1900, 0.25, 0.0031, 3e-5, 2.66e6, 3.88e9].map((m) => X.pathText(m)), ['483 m', '1.9 km', '25 cm', '3.1 mm', '30 µm', '2660 km', '3.88 × 10<sup>6</sup> km']);
+    assert.equal(X.pathText(482.67, 1), '480 m', 'two figures for a rough value');
+    assert.equal(X.pathText(999.6), '1000 m');
+    assert.equal(X.pathText(null), '—');
 });

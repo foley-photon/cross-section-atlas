@@ -14,9 +14,17 @@
 // (../thermochem/thermochem.css); that file is checked when the folder beside this one has it, as on the site, and
 // reported as not checked otherwise.
 //
+// The data checks: index.json is consistent with itself and with the spectrum files, and ozone at the mercury line
+// agrees with the reference value. Where the folder also has the split files the page reads first (species.json,
+// sp/<key>.json, who.json, coarse.json), they are worked out again here from index.json and the spectra and must
+// agree: the species list and the per-species files entry for entry, and the "Who absorbs here?" tables dataset for
+// dataset and value for value. A folder without them passes (the page then reads index.json) and is reported.
+//
 // The boot check (with data): app.js runs in a child Node process against a stand-in for the browser's document,
-// with fetch served from the data folder; it must load the index, draw the default molecule and fill every panel,
-// and stay free of errors through a few clicks (a laser line, the eV axis, a line width). bootPage() runs it.
+// with fetch served from the data folder; it must load the species list, draw the default molecule and fill every
+// panel, answer the air view in air (the line on what takes the light, the α column), and stay free of errors
+// through a few clicks (a laser line, the eV axis, a line width, the reverse lookup's "All molecules" and its first
+// molecule). bootPage() runs it.
 //
 // Exit code 1 when an engine case or a data check fails, when the page would not load, or when --data is given and
 // the data are missing. The site's own repository has no package.json, so Node would not know that js/*.js are ES
@@ -26,6 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
@@ -80,7 +89,10 @@ export function checkPage(siteDir = SITE) {
         }
         if ('app.js' in src) {
             // the data layout the page reads, which checkData and scripts/build_data.py write
-            if (!src['app.js'].includes("fetch('./data/index.json')")) problems.push('js/app.js does not fetch ./data/index.json');
+            if (!src['app.js'].includes("getJSON('./data/species.json')")) problems.push('js/app.js does not fetch ./data/species.json');
+            if (!src['app.js'].includes('getJSON(`./data/sp/${encodeURIComponent(s.file)}.json`)')) problems.push('js/app.js does not fetch a species from ./data/sp/<file>.json');
+            if (!src['app.js'].includes("getJSON('./data/index.json')")) problems.push('js/app.js does not fall back on ./data/index.json');
+            if (!src['app.js'].includes('getJSON(`./data/${name}.json`)') || !/loadWho\(name\)/.test(src['app.js'])) problems.push('js/app.js does not fetch ./data/who.json and ./data/coarse.json');
             if (!src['app.js'].includes('fetch(`./data/s/${x.f}.json`)')) problems.push('js/app.js does not fetch spectra from ./data/s/<f>.json');
             const html = fs.existsSync(path.join(siteDir, 'index.html')) ? fs.readFileSync(path.join(siteDir, 'index.html'), 'utf8') : '';
             const have = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
@@ -175,6 +187,36 @@ export const CASES = [
         '1.308 × 10<sup>4</sup>|2615|0.06061|1.805 × 10<sup>−31</sup>', 0],
     ['series', 'one paper\'s versions are separate temperature series', (X) => [X.seriesKey('mainz2013:O3_Bass(1984)_203K_245-340nm'), X.seriesKey('bremen:O3_Serdyuchenko2014_v2013FFT_293K')].join('|'),
         'mainz2013:O3_Bass(1984)|bremen:O3_Serdyuchenko2014_v2013FFT', 0],
+    ['ref-label', 'a reference label: the first surname, “et al.” past two authors, the file label where no author is given', (X) => [
+        X.refLabel({ a: 'S.P. Sander, J. Abbatt, J. R. Barker', y: 2011 }), X.refLabel({ a: 'L.T Molina and M.J. Molina', y: 1986 }), X.refLabel({ a: '', lab: 'Xx steps', y: 2026 })].join('|'),
+    'Sander et al. (2011)|Molina and Molina (1986)|Xx steps (2026)', 0],
+    ['who-line', 'who absorbs here at a preset line: the stored rows with their flags (1 recommended, 2 upper limits), and 12 of the 13 gases of air without data', (X) => {
+        const who = { sets: { '00001': ['O3', 'a', 298, 'x', 1], '00002': ['CF3OH', 'b', 298, 'x', 2] }, at: { '193.3': [['00001', 4.2763e-19], ['00002', 1e-21]] } };
+        const rows = X.whoAtLine(who, X.lineKey(193.3)); const air = X.whoView(rows, true);
+        return [rows.map((r) => `${r.k}:${r.sigma}:${+r.rec}${+r.ul}`).join(), air.rows.map((r) => r.k).join(), air.missing.length, String(X.lineKey(193))].join('|');
+    }, 'O3:4.2763e-19:10,CF3OH:1e-21:01|O3|12|null', 0],
+    ['who-coarse', 'who absorbs here between the lines: 193 nm is in the bin 192 to 194 nm, and −1837 stands for 10^−18.37 = 4.266 × 10⁻¹⁹ cm²', (X) => {
+        const r = X.whoCoarse({ bin: 2, sets: { '00001': ['O3', 'a', 298, 'x', 0] }, runs: [['00001', 96, [-1837]]] }, 193); return [r[0].sigma, r[0].lo, r[0].hi];
+    }, [4.2658e-19, 192, 194], 1e-4],
+    ['air', 'the air of the air view: n = 101 325 Pa / (k 296 K) = 2.479 37 × 10¹⁹ cm⁻³; water at 296 K saturates at 10^(5.40221 − 1838.675/264.263) bar = 2782.68 Pa (Antoine equation, NIST WebBook), so 50 % relative humidity is 1.373 % water vapor and oxygen 0.209476 × 0.98627 = 20.66 %',
+        (X) => [X.density(X.AIR.p, X.AIR.T), X.waterSaturation(296), X.waterFraction(50), X.airFraction('O2', 50)], [2.4793716e19, 2782.68, 0.01373146, 0.2065996], 1e-6],
+    ['air-alpha', 'in dry air oxygen with σ = 2 × 10⁻²⁴ cm² takes more light than ozone with 10⁻¹⁷ cm²: α = σ x n = 1.038 74 × 10⁻³ m⁻¹ (x = 0.209476) against 9.917 49 × 10⁻⁴ m⁻¹ (x = 40 ppb); together 2.030 49 × 10⁻³ m⁻¹, a 1/e length of 492.49 m', (X) => {
+        const row = (k, sigma) => ({ k, sigma, T: 298 }); const A = X.airAbsorption([row('O3', 1e-17), row('O2', 2e-24)], 0);
+        return [A.rows[0].alpha, A.rows[1].alpha, A.total, A.L, A.rows[0].k === 'O2' && A.tie && A.tie.k === 'O3' && !A.rough ? 1 : 0];
+    }, [1.038738e-3, 9.917486e-4, 2.030486e-3, 492.493, 1], 1e-6],
+    ['air-flags', 'in air an upper limit is listed and left out of the sum, a flagged value at the top makes the sum rough, and so does a 2 nm mean', (X) => {
+        const row = (k, sigma, more) => ({ k, sigma, T: 298, ...more });
+        const ul = X.airAbsorption([row('SO2', 1e-16, { ul: true }), row('O2', 2e-24)], 0);
+        const weak = X.airAbsorption([row('CO2', 1.5e-21, { at: 355, T: 2073 }), row('O2', 1.6e-25)], 0);
+        const mean = X.airAbsorption([row('O2', 2e-24, { approx: true })], 0);
+        return [ul.sum.map((r) => r.k).join(), ul.limits.map((r) => r.k).join(), ul.rough, weak.top.k, weak.rough, weak.firmTotal < weak.total / 10, mean.rough].join('|');
+    }, 'O2|SO2|false|CO2|true|true|true', 0],
+    ['air-doubt', 'at 248.4 nm the one O₂ series that runs past 245 nm is listed and left out of the sum for air, and at 193.3 nm a value on the flank of a band (σ spans a factor of 63 within ±0.25 nm) makes the sum rough', (X) => {
+        const who = { sets: { '00001': ['O2', 'a', 300, 'x', 0], '00002': ['H2O', 'b', 298, 'x', 0], '00003': ['O3', 'c', 298, 'x', 0] },
+            at: { '193.3': [['00002', 1.95e-21], ['00001', 6.7918e-22, null, null, 63]], '248.4': [['00003', 1.079e-17], ['00001', 1.984e-24]] } };
+        const kr = X.airAbsorption(X.whoAtLine(who, '248.4'), 50); const arf = X.airAbsorption(X.whoAtLine(who, '193.3'), 50);
+        return [kr.sum.map((r) => r.k).join(), kr.left.map((r) => r.k).join(), kr.rough, arf.top.k, arf.rough, X.whoNotes(arf.top).length].join('|');
+    }, 'O3|O2|false|O2|true|1', 0],
     // a kept point every 5 samples, gaps of at most 10: linear interpolation is off by at most 10²/8 × (1/50²) = 0.005 × 10⁻¹⁸ cm²
     // where σ ≥ 0.5 × 10⁻¹⁸ cm², so by at most 1 %
     ['resample', 'thinning a smooth 10 000-point spectrum to 2000 points keeps both ends and stays within 1 % of it', (X) => {
@@ -191,6 +233,12 @@ function close(got, want, tol) {
     if (typeof want === 'string') return got === want;
     if (!Number.isFinite(got)) return false;
     return want === 0 ? Math.abs(got) <= tol : Math.abs(got / want - 1) <= tol;
+}
+
+/** The engine (js/xsec.js) of a site folder, imported from a temporary copy. */
+export async function loadEngine(siteDir = SITE) {
+    const [tmp] = moduleCopy(siteDir);
+    try { return await import(pathToFileURL(path.join(tmp, 'xsec.js')).href); } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 /** Run the engine cases against the engine of a site folder: [{ id, title, pass, detail }]. */
@@ -240,6 +288,224 @@ export function ozoneCheck(index, spectra, opt = O3_HG) {
         detail: `median of ${values.length} datasets ${median.toExponential(4)} cm², ${(100 * dev).toFixed(2)} % from ${opt.sigma.toExponential(4)}` };
 }
 
+/* ── the split files, worked out again from index.json and the spectra ──── */
+// scripts/build_data.py writes these in Python from the archive; the functions below make them in JavaScript from
+// the files on the site. The two must agree (checkSplit), and tests/fixtures/make_fixtures.mjs writes the fixture
+// folder's copies with them.
+export const WHO_BIN = 2;                    // nm, the bin width of coarse.json (WHO_BIN in build_data.py)
+const ROOM_K = [280, 300]; const T_REF = 296;
+const RESERVED = new Set(['con', 'prn', 'aux', 'nul', ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((i) => [`com${i}`, `lpt${i}`])]);
+
+/** [class, distance] of a dataset's temperature: 0 at room temperature, 1 not given, 2 otherwise (t_rank in build_data.py). */
+function tRank(T) {
+    if (T == null) return [1, 0];
+    const [lo, hi] = Array.isArray(T) ? T : [T, T];
+    if (lo <= ROOM_K[1] && hi >= ROOM_K[0]) return [0, 0];
+    return [2, lo <= T_REF && T_REF <= hi ? 0 : Math.min(Math.abs(lo - T_REF), Math.abs(hi - T_REF))];
+}
+// What a file name says about a dataset (the same patterns as in build_data.py): a line-intensity list, which is not σ
+// and stays out of the tables; an electron energy loss spectrum; a list of band maxima; one isotopologue.
+const WHO_SKIP = /\(line intensities\)/;
+const EE = '(e,e)';
+const PEAKS = /\((?:[^()]*,)?(?:max|min|peaks(?:-[^(),]*)?|band peaks|band heads)(?:,[^()]*)?\)/;
+const ISO = /\((?=[^()]*\d{2}[CNOS])((?:(?:\d{2})?[CNOSH]\d?)+)\)$/;
+export const WIDE_NM = 5;                    // nm: points further apart than this around a wavelength are a gap
+export const FLOOR = 1e-40;                  // cm²: below this a value is underflow in the source, not a cross section
+const isPoints = (x) => x.np < 3 || PEAKS.test(x.id);
+const isoTag = (id) => { const m = ISO.exec(id); return m ? m[1] : ''; };
+const isWide = (gap) => gap != null && gap > WIDE_NM + 1e-6;
+/** The first index of d ([[λ, σ], …] sorted) with λ > x (strict true) or λ ≥ x. */
+const firstAbove = (d, x, strict) => { let lo = 0; let hi = d.length; while (lo < hi) { const m = (lo + hi) >> 1; if (strict ? d[m][0] <= x : d[m][0] < x) lo = m + 1; else hi = m; } return lo; };
+/** The distance in nm between the two points of d that bracket nm (0 at a point), or null outside the data (gap_at in build_data.py). */
+export function gapAt(d, nm) {
+    const n = d.length; const i = firstAbove(d, nm, true);
+    if (i === 0 || (i === n && nm > d[n - 1][0])) return null;
+    return d[i - 1][0] === nm || i === n ? 0 : d[i][0] - d[i - 1][0];
+}
+/** The spread of σ close to a laser line: the largest over the smallest value among the points of d within 0.25 nm of nm, as a whole number (at most 10 000), or null with fewer than three points there or a ratio below 2 (spread_at in build_data.py). */
+export function spreadAt(d, nm) {
+    let lo = Infinity; let hi = 0; let n = 0;
+    for (let i = firstAbove(d, nm - 0.25, false); i < firstAbove(d, nm + 0.25, true); i++) { const y = d[i][1]; if (y >= FLOOR) { n += 1; if (y < lo) lo = y; if (y > hi) hi = y; } }
+    if (n < 3) return null;
+    const r = hi / lo;
+    return r >= 2 ? Math.min(Math.floor(r + 0.5), 10000) : null;
+}
+/** The widest step in nm between neighboring points of d among the steps that reach into lo to hi (gap_in in build_data.py). */
+export function gapIn(d, lo, hi) {
+    const a = Math.max(firstAbove(d, lo, true) - 1, 0); const b = Math.min(firstAbove(d, hi, false), d.length - 1);
+    let g = 0; for (let i = a; i < b; i++) g = Math.max(g, d[i + 1][0] - d[i][0]);
+    return g;
+}
+/** The sort key of pick_key in build_data.py for an index row; wide: its points lie more than WIDE_NM apart around the wavelength. */
+const pickKey = (x, wide) => { const [c, d] = tRank(x.T); return [x.ul ? 1 : 0, x.id.includes(EE) ? 1 : 0, wide ? 1 : 0, isPoints(x) ? 1 : 0, ISO.test(x.id) ? 1 : 0, c, d, x.rec ? 0 : 1, -(x.y || 0), -x.n0, x.id]; };
+/**
+ * True when dataset a (an index row) stands for its species before dataset b where both have a value: measured values
+ * before upper limits, optical absorption before electron energy loss, points no more than 5 nm apart around the
+ * wavelength (wideA, wideB say that they are further apart), a spectrum before a list of separate points (one or two
+ * points, or band maxima), the natural sample before one isotopologue, room temperature, then no temperature given,
+ * then the temperature nearest 296 K, recommended, the most recent year, the most points in the source, and the id.
+ */
+export function pickBefore(a, b, wideA = false, wideB = false) {
+    const ka = pickKey(a, wideA); const kb = pickKey(b, wideB);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] < kb[i];
+    return false;
+}
+/** σ of a dataset at a laser line as the page's table gives it, to 8 figures: [σ, λ of the point or null], or null (page_value in build_data.py). */
+function pageValue(x, d, nm, X) {
+    const r = X.tableValue(x, d, nm);
+    if (r.sigma == null || r.thinned) return null;      // a thinned spectrum counts only through its stored full-resolution value
+    return [+r.sigma.toPrecision(8), isPoints(x) ? r.at : null];
+}
+/**
+ * Map of bin number j → round(100 log₁₀ of the mean σ over the bin) for every bin [jw, (j+1)w] nm whose center lies
+ * inside the spectrum d: the trapezoid integral of the linear interpolation over the part of the bin inside the data,
+ * divided by its width. The same arithmetic, step for step, as bin_means in build_data.py.
+ */
+export function binMeans(d, w = WHO_BIN) {
+    const n = d.length; const x0 = d[0][0]; const x1 = d[n - 1][0]; const out = new Map();
+    const upper = (x) => { let lo = 0; let hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (d[m][0] <= x) lo = m + 1; else hi = m; } return lo; };   // the first point with λ > x
+    const at = (x) => {
+        const i = upper(x);
+        if (i === n) return d[n - 1][1];
+        const [a, ya] = d[i - 1]; const [b, yb] = d[i];
+        return b === a ? ya : ya + ((yb - ya) * (x - a)) / (b - a);
+    };
+    for (let j = Math.floor(x0 / w); j <= Math.floor(x1 / w); j++) {
+        const c = (j + 0.5) * w;
+        if (!(x0 <= c && c <= x1)) continue;
+        const lo = Math.max(j * w, x0); const hi = Math.min((j + 1) * w, x1);
+        let m;
+        if (hi > lo) {
+            let px = lo; let py = at(lo); let area = 0;
+            for (let i = upper(lo); i < upper(hi); i++) { area += 0.5 * (py + d[i][1]) * (d[i][0] - px); px = d[i][0]; py = d[i][1]; }
+            area += 0.5 * (py + at(hi)) * (hi - px);
+            m = area / (hi - lo);
+        } else m = at(c);
+        out.set(j, Math.floor(100 * Math.log10(m) + 0.5));
+    }
+    return out;
+}
+/** A file name for each species key, in order: the key, or the key with _2, _3, … where an earlier name differs only by case or Windows keeps the name. */
+export function fileStems(keys) {
+    const taken = new Set();
+    return keys.map((k) => {
+        let stem = k; let n = 1;
+        while (taken.has(stem.toLowerCase()) || RESERVED.has(stem.toLowerCase())) { n += 1; stem = `${k}_${n}`; }
+        taken.add(stem.toLowerCase()); return stem;
+    });
+}
+const setRow = (k, x, X) => [k, X.refLabel(x.ref), x.T, x.src, (x.rec ? 1 : 0) + (x.ul ? 2 : 0) + (x.id.includes(EE) ? 4 : 0) + (PEAKS.test(x.id) ? 8 : 0), ...(isoTag(x.id) ? [isoTag(x.id)] : [])];
+/**
+ * The split files of an index: { slim (species.json), files ([[stem, species entry]] for sp/<stem>.json), who
+ * (who.json), coarse (coarse.json), thinned (the file numbers of thinned datasets, whose coarse values come from the
+ * full spectrum in the archive and cannot be worked out from the site's points) }. spectrum(f) gives the points of
+ * data/s/<f>.json; X is the page's engine.
+ */
+export function deriveSplit(index, spectrum, X) {
+    const stems = fileStems(index.species.map((s) => s.k));
+    const { skipped, skipped_why, ...meta } = index.meta;
+    const slim = { meta: { ...meta, sets: index.species.reduce((a, s) => a + s.sets.length, 0) },
+        species: index.species.map((s, i) => [s.k, s.f, s.n, s.cas, s.sets.length, ...(stems[i] !== s.k ? [stems[i]] : [])]) };
+    const lines = X.LASER_LINES.map((l) => l.nm);
+    const at = Object.fromEntries(lines.map((nm) => [String(nm), []]));
+    const runs = []; const usedAt = new Map(); const usedCoarse = new Map(); const thinned = new Set();
+    for (const s of index.species) {
+        const best = new Map(lines.map((nm) => [nm, null])); const bins = new Map();
+        for (const x of s.sets) {
+            const d = spectrum(x.f); if (!Array.isArray(d) || !d.length) continue;
+            if (x.n0 > x.np) thinned.add(x.f);
+            if (WHO_SKIP.test(x.id)) continue;
+            const points = isPoints(x);
+            for (const nm of lines) {
+                const v = pageValue(x, d, nm, X); const b = best.get(nm);
+                if (!v || v[0] < FLOOR) continue;
+                const gap = points ? null : gapAt(d, nm); const wide = isWide(gap);
+                if (!b || pickBefore(x, b.x, wide, b.wide)) best.set(nm, { x, wide, v: wide ? [v[0], null, +gap.toPrecision(3)] : v, band: points ? null : spreadAt(d, nm) });
+            }
+            if (points) continue;
+            const x0 = d[0][0]; const x1 = d[d.length - 1][0];
+            for (const [j, v] of binMeans(d)) {
+                if (v < 100 * Math.log10(FLOOR)) continue;
+                const wide = isWide(gapIn(d, Math.max(j * WHO_BIN, x0), Math.min((j + 1) * WHO_BIN, x1))); const b = bins.get(j);
+                if (!b || pickBefore(x, b.x, wide, b.wide)) bins.set(j, { x, v, wide });
+            }
+        }
+        for (const nm of lines) { const b = best.get(nm); if (b) { at[String(nm)].push({ k: s.k, ...b }); usedAt.set(b.x.f, setRow(s.k, b.x, X)); } }
+        for (const j of [...bins.keys()].sort((a, b) => a - b)) {
+            const { x, v, wide } = bins.get(j); const last = runs[runs.length - 1];
+            if (last && last[0] === x.f && last[1] + last[2].length === j && (last.length > 3) === wide) last[2].push(v); else runs.push([x.f, j, [v], ...(wide ? [1] : [])]);
+            usedCoarse.set(x.f, setRow(s.k, x, X));
+        }
+    }
+    const order = new Map(index.species.map((s, i) => [s.k, i]));
+    for (const k of Object.keys(at)) at[k] = at[k].sort((a, b) => b.v[0] - a.v[0] || order.get(a.k) - order.get(b.k)).map((r) => [r.x.f, r.v[0], ...(r.band != null ? [null, r.v.length > 2 ? r.v[2] : null, r.band] : r.v.length > 2 ? [null, r.v[2]] : r.v[1] != null ? [r.v[1]] : [])]);
+    const sorted = (m) => Object.fromEntries([...m].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+    return { slim, files: index.species.map((s, i) => [stems[i], s]), thinned,
+        who: { built: index.meta.built, lines: lines.map(String), sets: sorted(usedAt), at },
+        coarse: { built: index.meta.built, bin: WHO_BIN, sets: sorted(usedCoarse), runs } };
+}
+
+/**
+ * The split files of a data folder against what deriveSplit makes of its index.json: { present, problems }. Without
+ * species.json the folder has no split files (present false, no problem: the page reads index.json). With it, every
+ * piece must be there and agree.
+ */
+export function checkSplit(dataDir, index, spectrum, X) {
+    if (!fs.existsSync(path.join(dataDir, 'species.json'))) return { present: false, problems: [] };
+    const problems = []; const first = (list, what) => { if (list.length) problems.push(`${list[0]}${list.length > 1 ? ` (and ${list.length - 1} more ${what})` : ''}`); };
+    const read = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dataDir, f), 'utf8')); } catch { return undefined; } };
+    const want = deriveSplit(index, spectrum, X);
+    const slim = read('species.json');
+    if (slim === undefined) problems.push('data/species.json does not parse');
+    else if (!isDeepStrictEqual(slim, want.slim)) {
+        const rows = Array.isArray(slim.species) ? slim.species : [];
+        const i = want.slim.species.findIndex((r, q) => !isDeepStrictEqual(rows[q], r));
+        problems.push(`data/species.json does not match index.json: ${!isDeepStrictEqual(slim.meta, want.slim.meta) ? 'the meta block differs' : i >= 0 ? `species ${i + 1} is ${JSON.stringify(rows[i])}, index.json has ${JSON.stringify(want.slim.species[i])}` : `${rows.length} species, index.json has ${want.slim.species.length}`}`);
+    }
+    first(want.files.filter(([stem, s]) => !isDeepStrictEqual(read(`sp/${stem}.json`), s)).map(([stem, s]) => `data/sp/${stem}.json is missing or is not the entry of ${s.k} in index.json`), 'species files');
+    const stems = new Set(want.files.map(([stem]) => `${stem}.json`));
+    const extra = fs.existsSync(path.join(dataDir, 'sp')) ? fs.readdirSync(path.join(dataDir, 'sp')).filter((f) => !stems.has(f)) : [];
+    if (extra.length) problems.push(`data/sp has ${extra.length} file(s) no species names: ${extra.slice(0, 5).join(', ')}`);
+    const near = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a / b - 1) <= 1e-9;
+    const setsOf = (got, wanted, f) => first(Object.keys(wanted).filter((k) => !isDeepStrictEqual((got || {})[k], wanted[k])).map((k) => `data/${f}: dataset ${k} is labeled ${JSON.stringify((got || {})[k])}, index.json gives ${JSON.stringify(wanted[k])}`), 'labels');
+    const who = read('who.json');
+    if (!who || typeof who.at !== 'object' || !who.at) problems.push('data/who.json is missing or does not parse');
+    else {
+        if (!isDeepStrictEqual(who.lines, want.who.lines)) problems.push(`data/who.json lists the lines ${JSON.stringify(who.lines)}, the page has ${want.who.lines.join(', ')}`);
+        if (who.built !== want.who.built) problems.push(`data/who.json was built ${who.built}, index.json ${want.who.built}`);
+        const bad = [];
+        for (const nm of want.who.lines) {
+            const rows = want.who.at[nm]; const got = Array.isArray(who.at[nm]) ? who.at[nm] : [];
+            const i = rows.findIndex((r, q) => !(got[q] && got[q][0] === r[0] && near(got[q][1], r[1]) && (got[q][2] ?? null) === (r[2] ?? null) && (got[q][3] ?? null) === (r[3] ?? null)));
+            if (i >= 0) bad.push(`data/who.json at ${nm} nm: row ${i + 1} is ${JSON.stringify(got[i])}, the index and spectra give ${JSON.stringify(rows[i])}`);
+            else if (got.length !== rows.length) bad.push(`data/who.json at ${nm} nm: ${got.length} rows, the index and spectra give ${rows.length}`);
+        }
+        first(bad, 'lines'); setsOf(who.sets, want.who.sets, 'who.json');
+        if (Object.keys(who.sets || {}).length !== Object.keys(want.who.sets).length) problems.push(`data/who.json names ${Object.keys(who.sets || {}).length} datasets, its rows use ${Object.keys(want.who.sets).length}`);
+    }
+    const coarse = read('coarse.json');
+    if (!coarse || !Array.isArray(coarse.runs)) problems.push('data/coarse.json is missing or does not parse');
+    else {
+        if (coarse.bin !== WHO_BIN) problems.push(`data/coarse.json has bins of ${coarse.bin} nm, the check works with ${WHO_BIN} nm`);
+        if (coarse.built !== want.coarse.built) problems.push(`data/coarse.json was built ${coarse.built}, index.json ${want.coarse.built}`);
+        // run for run: the same dataset over the same bins; the values to within one step of the rounding, except
+        // those of thinned datasets, which the build takes from the full spectrum (they must be whole numbers, or null
+        // where the full spectrum's mean is below the floor)
+        const bad = [];
+        if (coarse.runs.length !== want.coarse.runs.length) bad.push(`data/coarse.json has ${coarse.runs.length} runs, the index and spectra give ${want.coarse.runs.length}`);
+        else {
+            want.coarse.runs.forEach((r, i) => {
+                const g = coarse.runs[i]; const soft = want.thinned.has(r[0]);
+                const same = Array.isArray(g) && g[0] === r[0] && g[1] === r[1] && (g[3] ?? null) === (r[3] ?? null) && Array.isArray(g[2]) && g[2].length === r[2].length
+                    && g[2].every((v, q) => (soft ? v === null || Number.isInteger(v) : Number.isInteger(v) && Math.abs(v - r[2][q]) <= 1));
+                if (!same) bad.push(`data/coarse.json run ${i + 1} is dataset ${g && g[0]} from bin ${g && g[1]}, ${g && g[2] && g[2].length} values; the index and spectra give ${r[0]} from bin ${r[1]}, ${r[2].length} values${Array.isArray(g) && g[0] === r[0] && g[1] === r[1] && g[2].length === r[2].length ? ', and a value differs' : ''}`);
+            });
+        }
+        first(bad, 'runs'); setsOf(coarse.sets, want.coarse.sets, 'coarse.json');
+    }
+    return { present: true, problems };
+}
+
 const MEDIA = new Set(['air', 'vacuum', 'unknown']);
 /** The wavelength range in an MPI-Mainz file name (_245-340nm, _210nm, _477.3,532.2,577.2nm), or null. */
 export function nameRange(id) {
@@ -253,9 +519,11 @@ const validT = (T) => T === null || Number.isFinite(T) || (Array.isArray(T) && T
 /**
  * The data files of a page copy: index.json parses and is consistent with itself, every dataset's spectrum file exists
  * and matches its row (point count, wavelength range, sorted wavelengths, σ > 0 and finite), there are no spectrum files
- * that no row names, and ozone agrees with the reference at the mercury line. Returns { present, problems, ozone }.
+ * that no row names, and ozone agrees with the reference at the mercury line. Where the folder has the split files
+ * (species.json and the rest), they must agree with index.json and the spectra (checkSplit, with the engine X: the
+ * repository's own unless another is given). Returns { present, problems, ozone, split }.
  */
-export function checkData(dataDir, opt = O3_HG) {
+export function checkData(dataDir, opt = O3_HG, X = OWN_ENGINE) {
     const ixPath = path.join(dataDir, 'index.json');
     if (!fs.existsSync(ixPath)) return { present: false, problems: [], ozone: null };
     const problems = [];
@@ -312,7 +580,10 @@ export function checkData(dataDir, opt = O3_HG) {
     if (extra.length) problems.push(`data/s has ${extra.length} file(s) no dataset names: ${extra.slice(0, 5).join(', ')}`);
     const ozone = ozoneCheck(index, spectrum, opt);
     if (ozone.pass === false) problems.push(`ozone at ${opt.nm} nm: ${ozone.detail}`);
-    return { present: true, problems, ozone, nSpecies: index.species.length, nSets: ids.size };
+    // the split files are compared only with an index that is sound: they are made from it
+    const split = problems.length ? { present: fs.existsSync(path.join(dataDir, 'species.json')), problems: [] } : checkSplit(dataDir, index, spectrum, X);
+    problems.push(...split.problems);
+    return { present: true, problems, ozone, nSpecies: index.species.length, nSets: ids.size, split: split.present, splitOk: split.present && !split.problems.length && problems.length === 0 };
 }
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
@@ -371,7 +642,7 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
     g.Plot = { draw: (el, o) => draws.push(o), clear: () => {} };
     g.fetch = async (url) => {
         const m = /^\.\/data\/(.+)$/.exec(String(url));
-        const f = m && path.join(dataDir, ...m[1].split('/'));
+        const f = m && path.join(dataDir, ...m[1].split('/').map(decodeURIComponent));
         if (!f || !fs.existsSync(f)) return { ok: false, status: 404, json: async () => { throw new Error('404'); } };
         const text = fs.readFileSync(f, 'utf8');
         return { ok: true, status: 200, json: async () => JSON.parse(text) };
@@ -391,11 +662,21 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
             if (!last || !last.series || !last.series.length) problems.push('no curve was drawn');
             if (/NaN|undefined/.test($('xs-at') ? $('xs-at').innerHTML : '')) problems.push('the laser-line table shows NaN or undefined');
         };
-        const snap = () => Object.fromEntries(['xs-sets', 'xs-at', 'xs-plot-note', 'xs-bl', 'xs-pp'].map((id) => [id, $(id) ? $(id).innerHTML || $(id).textContent : null]));
+        const split = fs.existsSync(path.join(dataDir, 'who.json'));   // a data folder from before the split has no reverse lookup
+        // the panel is drawn (its two view buttons) or asks for a wavelength; without the tables it says so
+        const whoShows = (what) => {
+            const h = $('xs-who') ? $('xs-who').innerHTML : '';
+            if (!(split ? h.includes('data-who-view') || h.includes('Enter a wavelength') : h.includes('no table for the reverse lookup'))) problems.push(`#xs-who does not show ${split ? 'the reverse lookup' : 'that the data have no table'} ${what}`);
+        };
+        const snap = () => Object.fromEntries(['xs-sets', 'xs-at', 'xs-who', 'xs-plot-note', 'xs-bl', 'xs-pp'].map((id) => [id, $(id) ? $(id).innerHTML || $(id).textContent : null]));
         let first = {};
         if (g.__xsec) {
             first = snap();
-            panels(false);
+            panels(false); whoShows('after the boot');
+            // the air view weights its rows by abundance: with a row, it says what takes the light in air and gives α
+            const w0 = first['xs-who'] || '';
+            if (split && g.__xsec.state.who !== 'all' && /data-who-k=/.test(w0) && !(/class="xs-who-take"/.test(w0) && /class="num xs-w-a"/.test(w0))) problems.push('the air view of the reverse lookup has rows and no answer for air (the line above the table, the α column)');
+            if (/NaN|undefined/.test(w0)) problems.push('the reverse lookup shows NaN or undefined after the boot');
             // the steps a reader takes: use a σ, a laser line, the eV axis, a line width
             await fire('document', 'click', { target: { closest: (s) => (s === 'button[data-use]' ? { dataset: { use: '1e-17' } } : null) } });
             await fire('xs-laser', 'click', { target: { closest: () => ({ dataset: { nm: '121.567' } }) } });
@@ -410,7 +691,33 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
         }
         const st = g.__xsec ? g.__xsec.state : {};
         const summary = g.__xsec ? `${st.k}: ${st.on.length} dataset(s) shown, ${draws.length} draw(s)` : '';
-        line = (`${JSON.stringify({ ok: !problems.length, problems: [...new Set(problems)], summary, first, last: snap() })}\n`);
+        const last = snap();
+        // the reverse lookup: every molecule at the line, then the first of them loaded with the dataset it is ranked by.
+        // Where the data have nothing at the line the clicks above left (Lyman-α), the preset line with the most rows is
+        // pressed first; data with no row at any line have nothing to load.
+        let who = {};
+        if (g.__xsec && split) {
+            const click = (sel, dataset) => fire('document', 'click', { target: { closest: (s) => (s === sel ? { dataset } : null) } });
+            let table = {}; try { table = JSON.parse(fs.readFileSync(path.join(dataDir, 'who.json'), 'utf8')).at || {}; } catch { table = {}; }
+            const rowsAt = (nm) => (Array.isArray(table[nm]) ? table[nm].length : 0);
+            if (!rowsAt(String(st.lam))) {
+                const best = Object.keys(table).sort((a, b) => rowsAt(b) - rowsAt(a) || a - b)[0];
+                if (best && rowsAt(best)) { await fire('xs-laser', 'click', { target: { closest: () => ({ dataset: { nm: best } }) } }); await settle(10); }
+            }
+            await click('button[data-who-view]', { whoView: 'all' }); await settle(10);
+            whoShows('after “All molecules”');
+            const all = $('xs-who').innerHTML;
+            const m = /data-who-k="([^"]+)" data-who-f="(\d{5})"/.exec(all);
+            if (!m) { if (rowsAt(String(st.lam))) problems.push(`the reverse lookup lists no molecule to load at ${st.lam} nm, where who.json has ${rowsAt(String(st.lam))}`); } else {
+                await click('button[data-who-k]', { whoK: m[1], whoF: m[2] }); await settle();
+                const sp = g.__xsec.index().species.find((s) => s.k === m[1]);
+                const on0 = sp && sp.sets ? sp.sets.find((x) => x.id === st.on[0]) : null;
+                if (st.k !== m[1] || !on0 || on0.f !== m[2]) problems.push(`loading ${m[1]} from the reverse lookup shows ${st.k} with dataset ${on0 ? on0.f : 'none'} first, not ${m[2]}`);
+                if (/NaN|undefined/.test($('xs-who').innerHTML)) problems.push('the reverse lookup shows NaN or undefined');
+            }
+            who = { all, picked: m ? m[1] : null, after: $('xs-who').innerHTML, at: $('xs-at').innerHTML };
+        }
+        line = (`${JSON.stringify({ ok: !problems.length, problems: [...new Set(problems)], summary, first, last, who })}\n`);
     } catch (err) {
         fail('boot', err);
         line = (`${JSON.stringify({ ok: false, problems, summary: '' })}\n`);
@@ -424,7 +731,8 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
 export async function runSelfTest(siteDir = SITE, { requireData = false, dataDir = path.join(siteDir, 'data') } = {}) {
     const page = checkPage(siteDir);
     const engine = await runEngineCases(siteDir);
-    const data = checkData(dataDir);
+    let X = OWN_ENGINE; try { X = await loadEngine(siteDir); } catch { /* a copy whose engine does not load is reported by checkPage */ }
+    const data = checkData(dataDir, O3_HG, typeof X.refLabel === 'function' ? X : OWN_ENGINE);
     const boot = data.present && !page.problems.length ? bootPage(siteDir, dataDir) : null;
     const why = [...page.problems];
     if (boot && !boot.ok) why.push(`the page does not boot on the data: ${boot.problems.join('; ')}`);
@@ -435,6 +743,10 @@ export async function runSelfTest(siteDir = SITE, { requireData = false, dataDir
     if (requireData && data.present && data.ozone && data.ozone.pass === null) why.push(`the ozone check could not run: ${data.ozone.detail}`);
     return { page, engine, data, boot, why };
 }
+
+// The repository's own engine, for the data checks when no other is given. On the site this file is run from the
+// release's checkout, which has site/ beside scripts/.
+const OWN_ENGINE = await import(new URL('../site/js/xsec.js', import.meta.url).href);
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain && process.argv[2] === '--boot-child') {
@@ -456,6 +768,7 @@ if (isMain && process.argv[2] === '--boot-child') {
     else {
         console.log(`data: ${r.data.nSpecies ?? '?'} species, ${r.data.nSets ?? '?'} datasets, ${r.data.problems.length} problem(s)`);
         for (const p of r.data.problems.slice(0, 20)) console.log('DATA', p);
+        console.log(!r.data.split ? 'split files: not present; the page reads index.json and has no reverse lookup' : r.data.splitOk ? 'split files: species.json, sp/, who.json and coarse.json agree with index.json and the spectra' : 'split files: not passed (see the problems above)');
         if (r.data.ozone) console.log(`ozone at ${O3_HG.nm} nm: ${r.data.ozone.pass === null ? 'not applicable' : r.data.ozone.pass ? 'pass' : 'FAIL'}; ${r.data.ozone.detail}`);
     }
     if (r.boot) console.log(`boot: ${r.boot.ok ? `pass (${r.boot.summary})` : 'FAIL'}`);

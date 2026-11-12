@@ -1,6 +1,8 @@
 """Tests of scripts/build_data.py on a small synthetic archive written to a temporary folder: which datasets are kept
-and which skipped, cleaning, thinning to MAX_POINTS, rounding, species merging, the index fields the page reads, a
-rebuild that gives the same bytes, and the output passing the site's data checks (scripts/selftest.mjs). One test
+and which skipped, cleaning, thinning to MAX_POINTS, rounding, species merging, the index fields the page reads, the
+split files (species list, one file per species, the "Who absorbs here?" tables and the rule that picks one dataset per
+species), a rebuild that gives the same bytes, and the output passing the site's data checks (scripts/selftest.mjs),
+which work the split files out again in JavaScript. One test
 compares the thinning with resample() in site/js/xsec.js point for point. The Node tests need Node on the PATH and are
 skipped without it. Standard library only.
 
@@ -82,9 +84,11 @@ class Build(unittest.TestCase):
         self.assertEqual(self.index['meta']['skipped'], ['mainz2013:ClNO2_rel', 'mainz2013:NO2_bad', 'mainz2013:X_empty'])
         self.assertEqual(self.index['meta']['skipped_why'], {'mainz2013:ClNO2_rel': 'units are not cm2/molecule',
                                                              'mainz2013:NO2_bad': 'flagged by the archive checks', 'mainz2013:X_empty': 'no point left'})
-        self.assertEqual(self.summary, '3 species, 5 datasets (3 skipped), spectra %.1f MB in 5 files, index %.2f MB' % (
-            sum(os.path.getsize(os.path.join(self.out, 's', '%05d.json' % i)) for i in range(1, 6)) / 1e6,
-            os.path.getsize(os.path.join(self.out, 'index.json')) / 1e6))
+        size = lambda *f: os.path.getsize(os.path.join(self.out, *f))
+        self.assertEqual(self.summary, '3 species, 5 datasets (3 skipped), spectra %.1f MB in 5 files, index %.2f MB; '
+                         'species list %.1f kB, 3 species files %.2f MB, who %.1f kB, coarse %.1f kB' % (
+            sum(size('s', '%05d.json' % i) for i in range(1, 6)) / 1e6, size('index.json') / 1e6, size('species.json') / 1e3,
+            sum(size('sp', f) for f in os.listdir(os.path.join(self.out, 'sp'))) / 1e6, size('who.json') / 1e3, size('coarse.json') / 1e3))
 
     def test_meta(self):
         m = self.index['meta']
@@ -138,8 +142,58 @@ class Build(unittest.TestCase):
     def test_rebuild_gives_the_same_bytes(self):
         out2 = os.path.join(self.tmp, 'data2')
         B.build(self.clean, out2, built='2026-11-11')
-        for f in ['index.json'] + ['s/%05d.json' % i for i in range(1, 6)]:
+        for f in ['index.json', 'species.json', 'who.json', 'coarse.json'] + ['s/%05d.json' % i for i in range(1, 6)] + ['sp/%s.json' % k for k in ('CH2O', 'O3', 'CH3C_O_OONO2')]:
             self.assertEqual(Path(self.out, f).read_bytes(), Path(out2, f).read_bytes(), f)
+
+    def test_index_json_is_what_it_was_before_the_split(self):
+        # the page up to 1.0.4 reads only index.json: its fields and their order are unchanged
+        self.assertEqual(list(self.index), ['meta', 'species'])
+        self.assertEqual(list(self.index['meta']), ['built', 'archive', 'max_points', 'sources', 'skipped', 'skipped_why'])
+        self.assertEqual(list(self.index['species'][0]), ['k', 'f', 'n', 'cas', 'sets'])
+        self.assertEqual(list(self.sets['mainz2013:O3_big']), ['id', 'f', 'src', 'T', 'l', 'np', 'n0', 'rec', 'med', 'res', 'ref', 'y', 'note', 'at'])
+        self.assertEqual(list(self.sets['bremen:O3_small']), ['id', 'f', 'src', 'T', 'l', 'np', 'n0', 'rec', 'med', 'res', 'ref', 'y', 'note'])
+
+    def test_species_list_and_species_files(self):
+        slim = json.loads(Path(self.out, 'species.json').read_text(encoding='utf-8'))
+        self.assertEqual(slim['species'], [['CH2O', 'CH2O', 'formaldehyde', '50-00-0', 2], ['O3', 'O3', 'ozone', '10028-15-6', 2], ['CH3C_O_OONO2', 'CH3C(O)OONO2', '', '', 1]])
+        m = dict(self.index['meta']); del m['skipped'], m['skipped_why']; m['sets'] = 5
+        self.assertEqual(slim['meta'], m)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.out, 'sp'))), ['CH2O.json', 'CH3C_O_OONO2.json', 'O3.json'])
+        for s in self.index['species']:
+            self.assertEqual(json.loads(Path(self.out, 'sp', s['k'] + '.json').read_text(encoding='utf-8')), s)
+
+    def test_who_at_the_laser_lines(self):
+        who = json.loads(Path(self.out, 'who.json').read_text(encoding='utf-8'))
+        self.assertEqual(who['lines'], [B.js_key(x) for x in B.LASER_NM])
+        self.assertEqual(who['built'], '2026-11-11')
+        big = self.sets['mainz2013:O3_big']; small = self.sets['bremen:O3_small']
+        # 248.4 nm: of the two ozone datasets only the 5000-point spectrum (200 to 249.99 nm) reaches it; it is thinned,
+        # so the value is the stored one of its full spectrum
+        # (the synthetic spectrum swings by a factor of 2 within 0.25 nm, which the row carries after two nulls)
+        self.assertEqual(who['at']['248.4'], [[big['f'], big['at']['248.4'], None, None, 2]])
+        self.assertEqual(who['at']['212.8'], [[big['f'], big['at']['212.8'], None, None, 2]])
+        self.assertEqual(who['sets'][big['f']], ['O3', 'Author and Author (1999)', 298.0, 'mainz2013', 0])
+        # 308 nm: formaldehyde's two-point file reaches from 300.12 to 305 nm, so its nearest point is 3 nm away: no value;
+        # the TUV-x file (310 and 320 nm) does not reach 308 nm either
+        self.assertEqual(who['at']['308'], [])
+        self.assertNotIn(small['f'], who['sets'], 'only the datasets that stand for a species are named')
+
+    def test_coarse_bins(self):
+        c = json.loads(Path(self.out, 'coarse.json').read_text(encoding='utf-8'))
+        self.assertEqual(c['bin'], 2)
+        big = self.sets['mainz2013:O3_big']
+        small = self.sets['bremen:O3_small']
+        # ozone's 5000-point spectrum over 200 to 249.99 nm has the bin centers 201 to 249 (bins 100 to 124), its three
+        # points over 250 to 260 nm the centers 251 to 259 (bins 125 to 129). Formaldehyde and the others have fewer than
+        # three points: no coarse values
+        self.assertEqual([(r[0], r[1], len(r[2])) for r in c['runs']], [(big['f'], 100, 25), (small['f'], 125, 5)])
+        # 250 to 252 nm on the line from 1.1e-17 at 250 nm to 1.15e-17 at 255 nm: the mean is 1.11e-17, round(100 × -16.9547)
+        self.assertEqual(c['runs'][1][2][0], -1695)
+        # the mean of the full spectrum over 200 to 202 nm, by the trapezoid rule on its 201 points
+        d = wavy(5000)[:201]
+        mean = sum(0.5 * (d[i][1] + d[i + 1][1]) * (round(d[i + 1][0], 4) - round(d[i][0], 4)) for i in range(200)) / 2
+        self.assertEqual(c['runs'][0][2][0], math.floor(100 * math.log10(mean) + 0.5))
+        self.assertEqual(sorted(c['sets']), sorted([big['f'], small['f']]))
 
     def test_archive_date(self):
         self.assertEqual(B.archive_date({'schema': 'x', 'date': '2026-11-07'}), '2026-11-07')
@@ -151,6 +205,66 @@ class Build(unittest.TestCase):
         self.assertEqual(s['bremen']['license'], 'No license stated; the files ask that the paper be cited.')
         self.assertEqual(s['cfa']['license'], 'No license stated; cite the publications.')
         self.assertTrue(all('research use' not in v['license'] for v in s.values()))
+
+    def test_who_helpers(self):
+        self.assertEqual(B.authors_short('A. Serdyuchenko, V. Gorshelev, M. Weber, W. Chehade, and J. P. Burrows'), 'Serdyuchenko et al.')
+        self.assertEqual(B.authors_short('L.T Molina and M.J. Molina'), 'Molina and Molina')
+        self.assertEqual(B.authors_short('S.P. Sander et al.'), 'Sander et al.')
+        self.assertEqual(B.authors_short(None), '')
+        self.assertEqual(B.ref_label({'a': '', 'y': 2026, 'lab': 'Xx steps'}), 'Xx steps (2026)')
+        self.assertEqual(B.ref_label({'a': '', 'y': '', 't': 'A title that runs on for rather more than fifty characters in all'}), 'A title that runs on for rather more than fifty ch…')
+        self.assertEqual(B.ref_label({'a': '', 'y': ''}), 'unknown')
+        self.assertEqual([B.t_rank(T) for T in (298.0, 280, [250, 285], None, 301, 273, [200, 250], [100, 400])], [(0, 0), (0, 0), (0, 0), (1, 0), (2, 5), (2, 23), (2, 46), (0, 0)])
+        self.assertEqual(B.file_stems(['CO', 'O3', 'Co', 'co', 'Co_2', 'NUL', 'C2H5O2+']), ['CO', 'O3', 'Co_2', 'co_3', 'Co_2_2', 'NUL_2', 'C2H5O2+'])
+        # bin means: a ramp from 1e-20 at 200 nm to 3e-20 at 202 nm averages 2e-20; a step at a bin edge belongs to the next bin
+        self.assertEqual(B.bin_means([200.0, 201.0, 202.0], [1e-20, 2e-20, 3e-20]), {100: -1970})
+        self.assertEqual(B.bin_means([200.0, 202.0, 202.0, 204.0], [1e-20, 1e-20, 4e-20, 4e-20]), {100: -2000, 101: -1940})
+        self.assertEqual(B.bin_means([199.0, 202.0, 205.0], [1e-20] * 3), {99: -2000, 100: -2000, 101: -2000, 102: -2000})
+        self.assertEqual(B.bin_means([200.0, 200.4, 200.8], [1e-20] * 3), {})
+        # the value at a line as the page's table gives it
+        row = {'np': 3, 'n0': 3, 'id': 'a'}
+        self.assertEqual(B.page_value(row, [240.0, 250.0, 260.0], [1e-18, 2e-18, 4e-18], 248.4), (1.84e-18, None))
+        self.assertIsNone(B.page_value(row, [240.0, 250.0, 260.0], [1e-18, 2e-18, 4e-18], 266))
+        self.assertEqual(B.page_value({'np': 1, 'n0': 1, 'id': 'a'}, [193.0], [5e-19], 193.3), (5e-19, 193.0), 'a single point within 1 nm')
+        self.assertIsNone(B.page_value({'np': 1, 'n0': 1, 'id': 'a'}, [192.0], [5e-19], 193.3))
+        self.assertEqual(B.page_value({'np': 2000, 'n0': 9000, 'id': 'a', 'at': {'248.4': 7e-20}}, [200.0, 250.0, 300.0], [1e-18] * 3, 248.4), (7e-20, None), 'a thinned dataset: the stored value')
+        self.assertIsNone(B.page_value({'np': 2000, 'n0': 9000, 'id': 'a', 'at': {'248.4': 7e-20}}, [200.0, 250.0, 300.0], [1e-18] * 3, 266))
+        # a list of band maxima is read point by point, never interpolated: the nearest point within 1 nm, or nothing
+        peaks = {'np': 3, 'n0': 3, 'id': 'mainz2013:RbI_Davidovits(1967)_1007K_241,265,330nm(max)'}
+        self.assertIsNone(B.page_value(peaks, [241.0, 265.0, 330.0], [5e-17, 6e-17, 2e-17], 248.4))
+        self.assertEqual(B.page_value(peaks, [241.0, 265.0, 330.0], [5e-17, 6e-17, 2e-17], 266), (6e-17, 265.0))
+
+    def test_what_a_file_name_says(self):
+        peak = lambda i: bool(B.PEAKS.search(i))   # noqa: E731
+        for tag in ('max', 'max,min', 'min,max', 'sh,max', 'max,sol', 'peaks', 'peaks-1cm-1', 'band peaks', 'band peaks,rec', 'band heads', 'max,min,rec', 'max,av'):
+            self.assertTrue(peak('mainz2013:Xx_A(2000)_298K_241,265nm(%s)' % tag), tag)
+        for tag in ('rec', 'sol', 'smoo', 'meas', '2nm', 'e,e', 'int-c', 'maximal'):
+            self.assertFalse(peak('mainz2013:Xx_A(2000)_298K_240-270nm(%s)' % tag), tag)
+        for tag in ('15NH3', '33SO2', '16O2', '16O18O', '14N15NO', 'O13CS', 'OC34S'):
+            self.assertEqual(B.iso_tag('mainz2013:Xx_A(2000)_298K_240-270nm(%s)' % tag), tag)
+        for i in ('mainz2013:CH2O_Co(2005)_298K_350.877-355.871nm(150Torr)', 'mainz2013:(CD3)2C=CD2_Bertrand(1975)_298K_123.6nm', 'mainz2013:O2_Yoshino(1992)_300K_179.2-180.2nm(12-0)',
+                  'mainz2013:OClO_Bogumil(2003)_293K_292-458nm(2nm)', 'mainz2013:CF2Cl2(CFC-12)_Au(1997)_298K_6.2-207nm(e,e)', 'mainz2013:Limonene(C10H16)_Smialek(2012)_298K_116-285nm',
+                  'mainz2013:(15NH3)_first(2000)_298K_200-210nm'):
+            self.assertEqual(B.iso_tag(i), '', i)
+        self.assertTrue(B.WHO_SKIP.search('mainz2013:H2O_Coheur(2002),Fally(2003)_290K_396-755nm(line intensities)'))
+        # the gap between the points around a wavelength, and the widest step that reaches into a bin
+        xs = [177.12, 206.64, 207.0, 212.0, 217.01]
+        self.assertAlmostEqual(B.gap_at(xs, 193.3), 29.52)
+        self.assertEqual(B.gap_at(xs, 207.0), 0.0, 'at a point')
+        self.assertEqual(B.gap_at(xs, 217.01), 0.0, 'the last point')
+        self.assertIsNone(B.gap_at(xs, 170)); self.assertIsNone(B.gap_at(xs, 220))
+        self.assertAlmostEqual(B.gap_in(xs, 206, 208), 29.52); self.assertAlmostEqual(B.gap_in(xs, 208, 210), 5.0); self.assertAlmostEqual(B.gap_in(xs, 206.8, 207.0), 0.36)
+        self.assertEqual([B.is_wide(g) for g in (None, 0.0, 5.0, 5.0000004, 5.01, 29.52)], [False, False, False, False, True, True])
+        # the spread of σ close to a line: the largest over the smallest value among the points within 0.25 nm, a whole
+        # number from 2 up; None with fewer than three points there, or a ratio below 2
+        bx = [193.0, 193.1, 193.2, 193.3, 193.4, 193.5, 193.6]; by = [1e-21, 2e-22, 1e-23, 6.3e-22, 5e-23, 5e-22, 9e-21]
+        self.assertEqual(B.spread_at(bx, by, 193.3), 63, '6.3e-22 / 1e-23 over 193.1 to 193.5 nm')
+        self.assertEqual(B.spread_at(bx, [1e-21, 1e-21, 1.2e-21, 1.5e-21, 1.9e-21, 1e-21, 1e-21], 193.3), None, 'below a factor of two')
+        self.assertEqual(B.spread_at(bx, [1e-21, 1e-21, 1e-21, 1.5e-21, 2e-21, 1e-21, 1e-21], 193.3), 2)
+        self.assertEqual(B.spread_at([190.0, 193.3, 196.0], [1e-21, 1e-19, 1e-17], 193.3), None, 'one point within 0.25 nm')
+        self.assertEqual(B.spread_at(bx, [1e-21, 1e-30, 1e-21, 1e-21, 1e-21, 1e-21, 1e-21], 193.3), 10000, 'written as 10 000 at most')
+        self.assertEqual(B.spread_at(bx, [1e-21, 1e-45, 1e-21, 1e-21, 1.1e-21, 1e-21, 1e-21], 193.3), None, 'underflow does not count')
+        self.assertEqual(B.who_flags({'id': 'a(e,e)', 'rec': True}), 5); self.assertEqual(B.who_flags({'id': 'a_241,265nm(max)', 'rec': False, 'ul': True}), 10)
 
     def test_key_and_rounding_helpers(self):
         self.assertEqual(B.key_of('CH3C(O)OONO2'), 'CH3C_O_OONO2')
@@ -225,6 +339,187 @@ RULES = [
         ref={'authors': 'E. Vigroux', 'year': 1953, 'title': 'Absorption', 'doi': None,
              'journal': 'Compt. Rend. 234, 2529 (1952).E. Vigroux, Ann. Phys. 8, 709 (1953); (1983).J . Brion, J. Phys. 45 (1984)'}),
 ]
+
+
+def flat(a, b, v, n=7):
+    """n points of a flat spectrum from a to b nm (7 points over 240 to 270 nm are 5 nm apart: not a gap)."""
+    return [[a + (b - a) * i / (n - 1), v] for i in range(n)]
+
+
+REF = lambda who, year: {'authors': who, 'year': year, 'title': 't', 'journal': 'j', 'doi': None}   # noqa: E731
+# One species per step of the rule that picks a dataset: every pair covers 248.4 nm (and 266 nm), and the σ of each
+# dataset tells which one was taken. The dataset that must win is the first of each pair.
+PICK = [
+    # a measured value before upper limits, although those are recommended and newer
+    row('mainz2013:Aa_Old(1970)_240K_240-270nm', 'Aa', flat(240, 270, 1e-18), T=240.0, ref=REF('A. Old', 1970)),
+    row('mainz2013:Aa_New(2020)_298K_240-270nm(upper limits)', 'Aa', flat(240, 270, 9e-18), rec=True, ref=REF('B. New', 2020)),
+    # a spectrum before a single point at the line
+    row('mainz2013:Bb_Spec(1980)_200K_240-270nm', 'Bb', flat(240, 270, 2e-18), T=200.0, ref=REF('A. Spec', 1980)),
+    row('mainz2013:Bb_Point(2015)_298K_248nm', 'Bb', [[248.0, 9e-18]], rec=True, ref=REF('B. Point', 2015)),
+    # room temperature, then no temperature given, then the nearest to 296 K
+    row('mainz2013:Cc_Room(1960)_285K_240-270nm', 'Cc', flat(240, 270, 3e-18), T=285.0, ref=REF('A. Room', 1960)),
+    row('tuvx:Cc_none', 'Cc', flat(240, 270, 9e-18), source='tuvx', T=None, rec=True, ref=REF('B. None', 2020)),
+    row('tuvx:Dd_none', 'Dd', flat(240, 270, 4e-18), source='tuvx', T=None, ref=REF('A. None', 1960)),
+    row('mainz2013:Dd_Cold(2020)_273K_240-270nm', 'Dd', flat(240, 270, 9e-18), T=273.0, rec=True, ref=REF('B. Cold', 2020)),
+    row('mainz2013:Ee_Warm(1960)_305K_240-270nm', 'Ee', flat(240, 270, 5e-18), T=305.0, ref=REF('A. Warm', 1960)),
+    row('mainz2013:Ee_Cold(2020)_273K_240-270nm', 'Ee', flat(240, 270, 9e-18), T=273.0, rec=True, ref=REF('B. Cold', 2020)),
+    # recommended before newer; newer before more points; more points; and a range that reaches room temperature
+    row('mainz2013:Ff_Rec(1990)_298K_240-270nm', 'Ff', flat(240, 270, 6e-18), rec=True, ref=REF('A. Rec', 1990)),
+    row('mainz2013:Ff_New(2020)_298K_240-270nm', 'Ff', flat(240, 270, 9e-18, 50), ref=REF('B. New', 2020)),
+    row('mainz2013:Gg_New(2011)_298K_240-270nm', 'Gg', flat(240, 270, 7e-18), ref=REF('A. New', 2011)),
+    row('mainz2013:Gg_Old(2006)_298K_240-270nm', 'Gg', flat(240, 270, 9e-18, 50), ref=REF('B. Old', 2006)),
+    row('mainz2013:Hh_Many(2000)_298K_240-270nm', 'Hh', flat(240, 270, 8e-18, 50), ref=REF('A. Many', 2000)),
+    row('mainz2013:Hh_Few(2000)_298K_240-270nm', 'Hh', flat(240, 270, 9e-18), ref=REF('B. Few', 2000)),
+    row('mainz2013:Ii_Range(1970)_250-285K_240-270nm', 'Ii', flat(240, 270, 8.5e-18), T=[250.0, 285.0], ref=REF('A. Range', 1970)),
+    row('mainz2013:Ii_Warm(2020)_301K_240-270nm', 'Ii', flat(240, 270, 9e-18), T=301.0, rec=True, ref=REF('B. Warm', 2020)),
+    # each wavelength has its own choice: Jj's room-temperature file ends at 255 nm, so at 266 nm the cold one stands in;
+    # two keys that differ only by case; and a point measured 0.3 nm from a line
+    row('mainz2013:Jj_Room(2000)_298K_240-255nm', 'Jj', flat(240, 255, 1.5e-18), ref=REF('A. Room', 2000)),
+    row('mainz2013:Jj_Cold(2000)_220K_240-270nm', 'Jj', flat(240, 270, 2.5e-18), T=220.0, ref=REF('B. Cold', 2000)),
+    row('mainz2013:CO_A(2000)_298K_240-270nm', 'CO', flat(240, 270, 1e-22), ref=REF('A. Co', 2000)),
+    row('mainz2013:Co_B(2001)_298K_240-270nm', 'Co', flat(240, 270, 1e-16), ref=REF('B. Cobalt', 2001)),   # another file name: the test archive may sit on a case-blind disk
+    row('mainz2013:Kk_Point(1975)_298K_193nm', 'Kk', [[193.0, 4.4e-19]], ref=REF('A. Point and B. Point', 1975)),
+    # optical absorption before an electron energy loss spectrum, although that one is at room temperature, recommended and newer
+    row('mainz2013:Ll_Opt(1960)_200K_240-270nm', 'Ll', flat(240, 270, 1.1e-18), T=200.0, ref=REF('A. Opt', 1960)),
+    row('mainz2013:Ll_EE(2020)_298K_240-270nm(e,e)', 'Ll', flat(240, 270, 9e-18, 50), rec=True, ref=REF('B. Ee', 2020)),
+    # points 5 nm apart before points 15 nm apart
+    row('mainz2013:Mm_Dense(1960)_200K_240-270nm', 'Mm', flat(240, 270, 1.2e-18), T=200.0, ref=REF('A. Dense', 1960)),
+    row('mainz2013:Mm_Sparse(2020)_298K_240-270nm', 'Mm', flat(240, 270, 9e-18, 3), rec=True, ref=REF('B. Sparse', 2020)),
+    # a spectrum before a list of band maxima, which has a point 0.4 nm from the line
+    row('mainz2013:Nn_Spec(1960)_200K_240-270nm', 'Nn', flat(240, 270, 1.3e-18), T=200.0, ref=REF('A. Spec', 1960)),
+    row('mainz2013:Nn_Max(2020)_298K_241,248,265nm(max)', 'Nn', [[241.0, 9e-18], [248.0, 9e-18], [265.0, 9e-18]], rec=True, ref=REF('B. Max', 2020)),
+    # the natural sample before one isotopologue
+    row('mainz2013:Pp_Nat(1960)_273K_240-270nm', 'Pp', flat(240, 270, 1.4e-18), T=273.0, ref=REF('A. Nat', 1960)),
+    row('mainz2013:Pp_Iso(2020)_298K_240-270nm(15NH3)', 'Pp', flat(240, 270, 9e-18, 50), rec=True, ref=REF('B. Iso', 2020)),
+    # where a weak dataset is all there is, it stands and says what it is: an isotopologue; a sparse electron energy
+    # loss spectrum; band maxima (no value between them: 248.4 nm lies between 241 and 265 nm)
+    row('mainz2013:Qq_Only(2000)_298K_240-270nm(34SO2)', 'Qq', flat(240, 270, 1.6e-18), ref=REF('A. Only', 2000)),
+    row('mainz2013:Rr_EE(2000)_298K_240-270nm(e,e)', 'Rr', flat(240, 270, 1.7e-18, 3), ref=REF('A. Loss', 2000)),
+    row('mainz2013:Ss_Max(1967)_1007K_241,265,330nm(max)', 'Ss', [[241.0, 5e-17], [265.0, 6e-17], [330.0, 2e-17]], T=1007.0, ref=REF('A. Peak', 1967)),
+    # a spectrum with a narrow band beside the line: σ ranges over a factor of 12 within 0.25 nm of 248.4 nm
+    row('mainz2013:Vv_Band(2001)_298K_240-270nm', 'Vv', [[240.0, 1e-20], [245.0, 1e-20], [248.2, 1e-20], [248.3, 1.2e-19], [248.4, 1e-20], [248.5, 1e-20],
+                                                         [248.6, 1e-20], [250.0, 1e-20], [255.0, 1e-20], [260.0, 1e-20], [265.0, 1e-20], [270.0, 1e-20]], ref=REF('A. Band', 2001)),
+    # never listed: line intensities, which are not σ, and underflow values
+    row('mainz2013:Tt_Lines(2002)_290K_240-270nm(line intensities)', 'Tt', flat(240, 270, 3e-26, 50), T=290.0, ref=REF('A. Lines', 2002)),
+    row('leiden:Uu', 'Uu', flat(240, 270, 8e-323), source='leiden', T=None, ref=REF('A. Tiny', 2017)),
+]
+
+
+class Who(unittest.TestCase):
+    """One dataset per species for "Who absorbs here?": the rule, step by step, on an archive made for it."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='xs-who-')
+        clean = os.path.join(cls.tmp, 'clean'); cls.out = os.path.join(cls.tmp, 'data')
+        write_archive(clean, PICK)
+        B.build(clean, cls.out, built='2026-11-11')
+        cls.index = json.loads(Path(cls.out, 'index.json').read_text(encoding='utf-8'))
+        cls.who = json.loads(Path(cls.out, 'who.json').read_text(encoding='utf-8'))
+        cls.coarse = json.loads(Path(cls.out, 'coarse.json').read_text(encoding='utf-8'))
+        cls.slim = json.loads(Path(cls.out, 'species.json').read_text(encoding='utf-8'))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def at(self, nm):
+        return [(self.who['sets'][r[0]][0], r[1]) for r in self.who['at'][nm]]
+
+    def test_the_rule_step_by_step(self):
+        # strongest first; each σ is that of the dataset the rule must take
+        self.assertEqual(self.at('248.4'), [('Co', 1e-16), ('Ii', 8.5e-18), ('Hh', 8e-18), ('Gg', 7e-18), ('Ff', 6e-18), ('Ee', 5e-18), ('Dd', 4e-18),
+                                            ('Cc', 3e-18), ('Bb', 2e-18), ('Rr', 1.7e-18), ('Qq', 1.6e-18), ('Jj', 1.5e-18), ('Pp', 1.4e-18), ('Nn', 1.3e-18),
+                                            ('Mm', 1.2e-18), ('Ll', 1.1e-18), ('Aa', 1e-18), ('Vv', 1e-20), ('CO', 1e-22)])
+
+    def test_weak_datasets_say_what_they_are(self):
+        f = {x['id']: x['f'] for s in self.index['species'] for x in s['sets']}
+        rows = {self.who['sets'][r[0]][0]: r for r in self.who['at']['248.4']}
+        iso, ee, peaks = f['mainz2013:Qq_Only(2000)_298K_240-270nm(34SO2)'], f['mainz2013:Rr_EE(2000)_298K_240-270nm(e,e)'], f['mainz2013:Ss_Max(1967)_1007K_241,265,330nm(max)']
+        self.assertEqual(self.who['sets'][iso], ['Qq', 'Only (2000)', 298.0, 'mainz2013', 0, '34SO2'], 'the isotopologue is named')
+        self.assertEqual(rows['Qq'], [iso, 1.6e-18])
+        self.assertEqual(self.who['sets'][ee], ['Rr', 'Loss (2000)', 298.0, 'mainz2013', 4], 'flag 4: electron energy loss')
+        self.assertEqual(rows['Rr'], [ee, 1.7e-18, None, 15.0], 'interpolated between points 15 nm apart')
+        # a structured spectrum carries the spread of σ close to the line, after two nulls; away from the band it does not
+        band = f['mainz2013:Vv_Band(2001)_298K_240-270nm']
+        self.assertEqual(rows['Vv'], [band, 1e-20, None, None, 12])
+        self.assertIn([band, 1e-20], self.who['at']['266'])
+        # band maxima: nothing between the bands at 248.4 nm; at 266 nm the maximum listed at 265 nm, with its wavelength
+        self.assertNotIn('Ss', rows)
+        self.assertIn([peaks, 6e-17, 265.0], self.who['at']['266'])
+        self.assertEqual(self.who['sets'][peaks][4], 8, 'flag 8: a list of band maxima')
+        self.assertNotIn(peaks, self.coarse['sets'], 'band maxima have no coarse values')
+        # the coarse runs carry the gap: Rr's is marked, Qq's is not
+        runs = {self.coarse['sets'][r[0]][0]: r for r in self.coarse['runs']}
+        self.assertEqual(runs['Rr'][3:], [1]); self.assertEqual(len(runs['Qq']), 3)
+        # line intensities and underflow values are in the atlas and in no table
+        for sid in ('mainz2013:Tt_Lines(2002)_290K_240-270nm(line intensities)', 'leiden:Uu'):
+            self.assertIn(sid, f)
+            self.assertNotIn(f[sid], self.who['sets']); self.assertNotIn(f[sid], self.coarse['sets'])
+        self.assertFalse({'Tt', 'Uu'} & {self.who['sets'][r[0]][0] for rs in self.who['at'].values() for r in rs})
+
+    def test_each_wavelength_has_its_own_choice(self):
+        got = dict(self.at('266'))
+        self.assertEqual(got['Jj'], 2.5e-18, 'the room-temperature file ends at 255 nm')
+        self.assertEqual(got['Bb'], 2e-18)
+        self.assertEqual(len(got), 20)
+        # in the coarse table Jj changes dataset where the room-temperature file ends: its last bin center is 255 nm
+        f = {x['id']: x['f'] for s in self.index['species'] for x in s['sets']}
+        runs = [r for r in self.coarse['runs'] if self.coarse['sets'][r[0]][0] == 'Jj']
+        room, cold = f['mainz2013:Jj_Room(2000)_298K_240-255nm'], f['mainz2013:Jj_Cold(2000)_220K_240-270nm']
+        self.assertEqual([(r[0], r[1], len(r[2])) for r in runs], [(room, 120, 8), (cold, 128, 7)])
+        self.assertEqual(set(runs[0][2]), {math.floor(100 * math.log10(1.5e-18) + 0.5)})
+
+    def test_flags_points_and_labels(self):
+        f = {x['id']: x['f'] for s in self.index['species'] for x in s['sets']}
+        # a single point 0.3 nm from the ArF line: listed with its own wavelength
+        self.assertEqual(self.who['at']['193.3'], [[f['mainz2013:Kk_Point(1975)_298K_193nm'], 4.4e-19, 193.0]])
+        self.assertEqual(self.who['sets'][f['mainz2013:Kk_Point(1975)_298K_193nm']], ['Kk', 'Point and Point (1975)', 298.0, 'mainz2013', 0])
+        self.assertEqual(self.who['sets'][f['mainz2013:Ff_Rec(1990)_298K_240-270nm']][4], 1, 'recommended')
+        # upper limits stand for a species only where it has nothing else: Aa's are never chosen here
+        self.assertNotIn(f['mainz2013:Aa_New(2020)_298K_240-270nm(upper limits)'], self.who['sets'])
+        self.assertNotIn(f['mainz2013:Aa_New(2020)_298K_240-270nm(upper limits)'], self.coarse['sets'])
+        # a single point has no coarse values
+        self.assertNotIn(f['mainz2013:Kk_Point(1975)_298K_193nm'], self.coarse['sets'])
+
+    def test_keys_that_differ_only_by_case(self):
+        rows = {r[0]: r for r in self.slim['species']}
+        self.assertEqual(rows['CO'], ['CO', 'CO', '', '', 1])
+        self.assertEqual(rows['Co'], ['Co', 'Co', '', '', 1, 'Co_2'], 'the second of the two names its file')
+        names = sorted(os.listdir(os.path.join(self.out, 'sp')))
+        self.assertEqual(len(names), 23)
+        self.assertEqual(len({n.lower() for n in names}), 23, 'no two files that a case-blind disk would merge')
+        self.assertEqual(json.loads(Path(self.out, 'sp', 'Co_2.json').read_text(encoding='utf-8'))['k'], 'Co')
+        self.assertEqual(json.loads(Path(self.out, 'sp', 'CO.json').read_text(encoding='utf-8'))['k'], 'CO')
+
+    def test_species_files_of_an_earlier_build_are_removed(self):
+        Path(self.out, 'sp', 'Zz.json').write_text('{}')
+        Path(self.out, 'sp', 'keep.txt').write_text('not mine')
+        B.build(os.path.join(self.tmp, 'clean'), self.out, built='2026-11-11')
+        self.assertFalse(Path(self.out, 'sp', 'Zz.json').exists())
+        self.assertTrue(Path(self.out, 'sp', 'keep.txt').exists())
+        os.remove(Path(self.out, 'sp', 'keep.txt'))
+
+    @unittest.skipUnless(NODE, 'node is not on the PATH')
+    def test_the_page_side_works_out_the_same_tables(self):
+        # scripts/selftest.mjs makes species.json, sp/, who.json and coarse.json again in JavaScript from index.json and
+        # the spectra, and fails where this build's files differ
+        r = subprocess.run([NODE, str(ROOT / 'scripts' / 'selftest.mjs'), str(ROOT / 'site'), '--data-dir', self.out],
+                           capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('split files: species.json, sp/, who.json and coarse.json agree with index.json and the spectra', r.stdout)
+        self.assertIn('boot: pass', r.stdout)
+
+    @unittest.skipUnless(NODE, 'node is not on the PATH')
+    def test_labels_match_the_page_engine(self):
+        refs = [{'a': 'A. Serdyuchenko, V. Gorshelev, M. Weber, W. Chehade, and J. P. Burrows', 'y': 2014}, {'a': 'L.T Molina and M.J. Molina', 'y': 1986},
+                {'a': 'S.P. Sander et al.', 'y': '2011'}, {'a': 'G. von Helden', 'y': ''}, {'a': '', 'y': 1999, 'lab': 'LISA-unpubl'},
+                {'a': '', 'y': '', 't': 'A title that runs on for rather more than fifty characters in all'}, {'a': '', 'y': ''},
+                {'a': 'J. Malicet, D. Daumont, J. Charbonnier, C. Parisse, A. Chakir and J. Brion', 'y': 1995}, {'a': 'A. B. Meinel and  C. D.  Meinel,and E. F. Third', 'y': 1}]
+        js = ("import * as X from './site/js/xsec.js'; let s=''; process.stdin.on('data', (c) => s += c);"
+              "process.stdin.on('end', () => process.stdout.write(JSON.stringify(JSON.parse(s).map(X.refLabel))));")
+        r = subprocess.run([NODE, '--input-type=module', '-e', js], input=json.dumps(refs), capture_output=True, text=True, encoding='utf-8', cwd=str(ROOT))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [B.ref_label(x) for x in refs])
 
 
 class Rules(unittest.TestCase):

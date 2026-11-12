@@ -20,7 +20,7 @@ authors:
   - family-names: Foley
     given-names: Casey D.
     website: "https://cdfoley.com"
-version: "1.0.4"
+version: "1.1.0"
 date-released: "2026-11-12"
 license: MIT
 repository-code: "https://github.com/foley-photon/cross-section-atlas"
@@ -40,7 +40,7 @@ preferred-citation:
     - family-names: Foley
       given-names: Casey D.
       website: "https://cdfoley.com"
-  version: "1.0.4"
+  version: "1.1.0"
   date-released: "2026-11-12"
   url: "https://cdfoley.com/beta/cross-sections/"
   repository-code: "https://github.com/foley-photon/cross-section-atlas"

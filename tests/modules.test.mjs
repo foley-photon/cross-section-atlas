@@ -73,6 +73,12 @@ test('index.html that does not load app.js or the stylesheet is caught', () => {
 });
 
 test('app.js that reads another data layout is caught', () => {
-    const r = copy((d) => change(d, 'js/app.js', 'fetch(`./data/s/${x.f}.json`)', 'fetch(`./data/sp/${x.f}.json`)'));
+    const r = copy((d) => change(d, 'js/app.js', 'fetch(`./data/s/${x.f}.json`)', 'fetch(`./data/spectra/${x.f}.json`)'));
     assert.deepEqual(r.problems, ['js/app.js does not fetch spectra from ./data/s/<f>.json']);
+    assert.deepEqual(copy((d) => change(d, 'js/app.js', "getJSON('./data/species.json')", "getJSON('./data/list.json')")).problems, ['js/app.js does not fetch ./data/species.json']);
+    assert.deepEqual(copy((d) => change(d, 'js/app.js', '`./data/sp/${encodeURIComponent(s.file)}.json`', '`./data/sp/${s.k}.json`')).problems, ['js/app.js does not fetch a species from ./data/sp/<file>.json']);
+    assert.deepEqual(copy((d) => change(d, 'js/app.js', "full ||= getJSON('./data/index.json');", "full ||= getJSON('./data/all.json');")).problems.length, 0, 'the fallback at boot still names index.json');
+    assert.deepEqual(copy((d) => { change(d, 'js/app.js', "full ||= getJSON('./data/index.json');", "full ||= getJSON('./data/all.json');"); change(d, 'js/app.js', "full = getJSON('./data/index.json');", "full = getJSON('./data/all.json');"); }).problems,
+        ['js/app.js does not fall back on ./data/index.json']);
+    assert.deepEqual(copy((d) => change(d, 'js/app.js', 'getJSON(`./data/${name}.json`)', 'getJSON(`./data/who/${name}.json`)')).problems, ['js/app.js does not fetch ./data/who.json and ./data/coarse.json']);
 });

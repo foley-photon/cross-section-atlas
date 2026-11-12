@@ -1,5 +1,5 @@
-// Writes tests/fixtures/data/: a data folder in the layout the page reads (index.json and s/<n>.json), small enough to
-// live in the repository. It holds
+// Writes tests/fixtures/data/: a data folder in the layout the page reads (index.json and s/<n>.json, and the split
+// files species.json, sp/<key>.json, who.json and coarse.json), small enough to live in the repository. It holds
 //   - two excerpts of the MPI-Mainz UV/VIS Spectral Atlas 2013 snapshot (CC BY 4.0, doi:10.5281/zenodo.6951; see
 //     NOTICE.md): ozone from L. T. Molina and M. J. Molina, J. Geophys. Res. 91, 14501 (1986), 0.5 nm averages at 298 K
 //     and 226 K, 245–262 nm only (35 of the 331 points of each file), values unchanged;
@@ -7,10 +7,16 @@
 //     temperature), which are mine and MIT-licensed like the code. The 298 K band is marked as if the build had thinned
 //     it from 6001 points and stored the band's values at four laser lines (the Gaussian itself, to 5 figures); the
 //     VUV steps carry a citation text instead of authors and title, and are marked as upper limits.
+// The split files are made from the index and the spectra by deriveSplit() of scripts/selftest.mjs, the JavaScript twin
+// of what scripts/build_data.py writes (tests/test_build_data.py checks that the two agree). In "Who absorbs here?" the
+// thinned band stands for Xx at 212.8 to 266 nm (it has more points in its source than the 200 to 300 K band), the single
+// point at Lyman-α, and the upper limits at 157.6 nm, where Xx has nothing else.
 // Run from the repository root to rewrite the folder: node tests/fixtures/make_fixtures.mjs
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deriveSplit } from '../../scripts/selftest.mjs';
+import * as X from '../../site/js/xsec.js';
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data');
 const nm = Array.from({ length: 35 }, (_, i) => 245 + 0.5 * i);
@@ -67,4 +73,10 @@ fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, 's'), { recursive: true });
 fs.writeFileSync(path.join(OUT, 'index.json'), JSON.stringify(index));
 for (const [f, d] of Object.entries(spectra)) fs.writeFileSync(path.join(OUT, 's', `${f}.json`), JSON.stringify(d));
-console.log(`wrote ${OUT}: ${index.species.length} species, ${Object.keys(spectra).length} spectra`);
+const split = deriveSplit(index, (f) => spectra[f], X);
+fs.mkdirSync(path.join(OUT, 'sp'));
+fs.writeFileSync(path.join(OUT, 'species.json'), JSON.stringify(split.slim));
+for (const [stem, s] of split.files) fs.writeFileSync(path.join(OUT, 'sp', `${stem}.json`), JSON.stringify(s));
+fs.writeFileSync(path.join(OUT, 'who.json'), JSON.stringify(split.who));
+fs.writeFileSync(path.join(OUT, 'coarse.json'), JSON.stringify(split.coarse));
+console.log(`wrote ${OUT}: ${index.species.length} species, ${Object.keys(spectra).length} spectra, and the split files`);
