@@ -66,12 +66,44 @@ test('a dataset with a citation text and upper limits is listed as such', () => 
     assert.match(text(r.first['xs-at']), /Xx steps \(2026\) rec\. 295 K 2\.000 × 10 E−19 upper limit/);
 });
 
+test('a decimal comma in a field is read as a decimal, not cut at the comma', () => {
+    // 1,5 mJ cm⁻² at 121.567 nm (the clicked line): 1.5e-3 J / 1.634 03e-18 J = 9.180e14 photons cm⁻²; cut at the comma it would be 6.120e14
+    const comma = bootPage(SITE, FIX, 'F=1,5');
+    const point = bootPage(SITE, FIX, 'F=1.5');
+    assert.equal(comma.ok, true, comma.problems.join('; '));
+    assert.match(text(comma.last['xs-pp']), /Photon fluence 9\.180 × 10 E14 /);
+    assert.equal(comma.last['xs-pp'], point.last['xs-pp']);
+    assert.doesNotMatch(text(comma.last['xs-pp']), /6\.120 × 10 E14/);
+});
+
+test('text that is not a number gives a message that names the field, and no result', () => {
+    const amb = bootPage(SITE, FIX, 'F=1,064');
+    assert.match(text(amb.last['xs-pp']), /“1,064” is ambiguous \(pulse fluence\): enter 1064 or 1\.064 \(decimal comma: 1,0640\)\./);
+    assert.doesNotMatch(amb.last['xs-pp'], /tc-results/);
+    const junk = bootPage(SITE, FIX, 'p=12abc');
+    assert.match(text(junk.last['xs-bl']), /“12abc” is not a number \(pressure\)\./);
+    assert.doesNotMatch(junk.last['xs-bl'], /tc-results/, 'parseFloat would have computed with 12');
+    const lam = bootPage(SITE, FIX, 'lam=24x');
+    assert.match(text(lam.first['xs-at']), /“24x” is not a number \(wavelength\)\./);
+});
+
+test('the laser-line table: units spelled out, and a second value column only for another unit', () => {
+    const r = bootPage(SITE, FIX);
+    // 248.4 nm: 10⁷/248.4 = 40257.6 cm⁻¹, 1239.841 984/248.4 = 4.9913 eV
+    assert.match(text(r.first['xs-at']), /248\.4 nm = 40257\.6 cm⁻¹ = 4\.9913 eV\./);
+    assert.equal((r.first['xs-at'].match(/<th[ >]/g) || []).length, 5, 'Dataset, T, σ, Note and the use column');
+    const eps = bootPage(SITE, FIX, 'y=eps10');
+    assert.equal((eps.first['xs-at'].match(/<th[ >]/g) || []).length, 6);
+    // ε (base 10) of 1.0798e-17 cm²: × 6.022 140 76e23 / (1000 ln 10) = 2824
+    assert.match(text(eps.first['xs-at']), /1\.080 × 10 E−17 2824 /);
+});
+
 test('negative control: an unchanged copy boots', () => {
     assert.equal(bootCopy(() => {}).boot.ok, true);
 });
 
 test('a page that throws on its first render is caught by the boot check only', () => {
-    const r = bootCopy((d) => change(d, 'js/app.js', 'function renderAll() { renderPlot();', 'function renderAll() { renderPlotX();'));
+    const r = bootCopy((d) => change(d, 'js/app.js', 'function renderAll() { markFields(); renderPlot();', 'function renderAll() { markFields(); renderPlotX();'));
     assert.deepEqual(r.page.problems, [], 'the static page check cannot see this');
     assert.equal(r.boot.ok, false);
     assert.ok(r.boot.problems.some((p) => /renderPlotX is not defined/.test(p)), r.boot.problems.join('; '));

@@ -169,6 +169,8 @@ export const CASES = [
         const a = X.tableValue(meta, d, 121.567); const b = X.tableValue(meta, d, 121.567, 0.05);
         return [a.sigma, a.full, a.thinned, b.full, b.thinned].join();
     }, '1.147e-20,true,false,false,true', 0],
+    ['typed-number', 'a typed number is read whole or not at all: 1,5 is 1.5 (not 1), 1,064 and 12abc are refused', (X) => [X.parseNum('1,5'), X.parseNum('1.5e-17'), X.parseNum('1,064'), X.parseNum('12abc'), X.parseNum('')].join('|'), '1.5|1.5e-17|||', 0],
+    ['axis-limits', 'plot limits of 200 to 280 nm are 4.428 to 6.199 eV, and 4 to 6.2 eV are 199.9745 to 309.9605 nm', (X) => { const a = X.limitsFromNm('eV', '200', '280'); const b = X.limitsToNm('eV', '4', '6.2'); return [a.from, a.to, b.min, b.max].join('|'); }, '4.428|6.199|199.9745|309.9605', 0],
     ['format', 'numbers on the page: 13 077.2 is 1.308 × 10⁴ (not 1.308e+4), 2615.38 is 2615, 0.0606092 is 0.06061', (X) => [X.formatSci(13077.2), X.formatSci(2615.38), X.formatSci(0.0606092), X.formatSci(1.805e-31)].join('|'),
         '1.308 × 10<sup>4</sup>|2615|0.06061|1.805 × 10<sup>−31</sup>', 0],
     ['series', 'one paper\'s versions are separate temperature series', (X) => [X.seriesKey('mainz2013:O3_Bass(1984)_203K_245-340nm'), X.seriesKey('bremen:O3_Serdyuchenko2014_v2013FFT_293K')].join('|'),

@@ -18,11 +18,12 @@ formats and units. The atlas puts them side by side, credits each dataset, and d
   from different papers; any of them can be added, up to eight at once. Each dataset is listed with its reference,
   temperature, wavelength range, number of points, source and wavelength scale (air, vacuum or not stated). Where a
   source gives no authors or title, the page shows its citation text (or, for TUV-x, the file header) instead.
+  The list can be filtered to the recommended datasets or to one source.
 - **Spectrum.** σ against wavelength (nm), wavenumber (cm⁻¹) or photon energy (eV), on a log or linear axis, in any
   of eleven units: cm² molecule⁻¹, Mb, barn, Å², a₀², m², molar absorptivity ε in base 10 or base e, the absorption
   coefficient k in cm⁻¹ atm⁻¹ at 273.15 K in base e or base 10, and the oscillator-strength density df/dE. Wavelength
   ranges (VUV, UV-C, UV-B/A, visible), common laser lines marked on the plot, a CSV download of what is shown, and a
-  link that restores the view.
+  link that restores the view. The plot limits are typed in the unit of the axis. Reset returns the page to how it opens.
 - **At a laser line.** σ of each shown dataset at a wavelength, as a point value or averaged over a Gaussian line of
   a given FWHM, with a note when the line is outside the data, partly outside, narrower than the data spacing, when
   the dataset holds upper limits, or when the value comes from a spectrum thinned for the web. At the preset laser
@@ -32,6 +33,9 @@ formats and units. The atlas puts them side by side, credits each dataset, and d
   absorbance and transmitted fraction. From a pulse fluence and a quantum yield: photons per cm², fraction excited,
   fraction photolyzed and the saturation fluence.
 - **Convert units.** One value in every unit above.
+
+Every field reads a number whole or not at all, by the same rules as the calculators on the site: 1,5 is 1.5, while
+1,064 (1064 or 1.064?) and 12abc are refused with a message that names the field.
 
 ## The physics in brief
 
@@ -238,8 +242,8 @@ tests/               Node and Python tests, and their fixtures
   Lyman-α, 490 times). That is the error of the plotted curve (`scripts/thinning_check.py`). At the preset lines the
   table gives the stored full-resolution value instead (Leiden O₂ at Lyman-α: 1.147 × 10⁻²⁰ cm²); anywhere else it
   says when a value comes from a thinned spectrum.
-- The 40 engine cases pass in Node on this repository's copy and on the site's, the site's copy passes the data
-  checks and the boot check, and the page loads in a browser with no console errors. 49 Node tests and 27 Python
+- The 42 engine cases pass in Node on this repository's copy and on the site's, the site's copy passes the data
+  checks and the boot check, and the page loads in a browser with no console errors. 56 Node tests and 28 Python
   tests pass.
 
 ## Known limitations

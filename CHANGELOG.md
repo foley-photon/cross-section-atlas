@@ -4,6 +4,19 @@ Versions follow semantic versioning. Releases are made by hand (`scripts/release
 `scripts/finish-release.sh`, README.md "Making a release"); cdfoley.com copies the latest release once a day. A new build of the data files is not a release of this repository: the data live only on
 the site (README.md).
 
+## 1.0.4 - 2026-11-12
+
+- A number typed into any field is now read whole or not at all. Before, 1,5 was read as 1 and 12abc as 12, and the page computed with that. Now a decimal comma is a decimal (1,5 is 1.5), and text that is not one number (1,064, which could be 1064 or 1.064, or 12abc) gives a message that names the field instead of a result.
+- On a phone, the table of values at a laser line is now one card per dataset, so the cross section is no longer cut off at the edge of the screen.
+- Shorter introduction. The list of the five collections moved to the Data sources and terms panel.
+- New Typical values table and a Worked example that follows the page as it opens, number for number. A line under the laser-line table gives a sense of scale.
+- Reset and Copy link sit in the head of the Spectrum panel. Reset returns the page to how it opens.
+- The dataset list can be filtered to the recommended datasets or to one source. The count badge names the molecule (O3: 264 datasets). Two shown datasets with the same reference and temperature are told apart by their wavelength range.
+- The From and To limits of the plot are in the unit of the horizontal axis (nm, cm-1 or eV) and convert when the axis changes. Laser-line labels on the plot are in that unit too, and where the lines crowd only the labels that fit are drawn.
+- The line under the laser-line table writes its units out (248.4 nm = 40257.6 cm-1 = 4.9913 eV). The second value column appears only when the plot unit is not cm2.
+- A search with no match says so instead of closing. The optical depth heading shows a lower-case tau. The value field of the unit converter keeps its width on a phone.
+- The BETA badge beside the title is gone; the line above the title, the breadcrumb and the notice already say beta.
+
 ## 1.0.3 - 2026-11-11
 
 - Page description, social-card text and structured data say "five public collections" instead of "five open datasets", matching the introduction: three of the five collections state no license.

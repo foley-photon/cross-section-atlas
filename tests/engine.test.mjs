@@ -296,3 +296,71 @@ test('temperature series and the log-axis floor', () => {
     near(X.logFloor([[[1, 1e-17], [2, 1e-320]], [[1, 3e-19]]]), 1e-29, 1e-12);
     assert.equal(X.logFloor([]), 0);
 });
+
+test('numbers typed into the form are read whole or not at all', () => {
+    // the bug this replaces: parseFloat("1,5") is 1, and a fluence of 1,5 mJ/cm² was computed as 1
+    assert.equal(X.parseNum('1,5'), 1.5, 'a decimal comma');
+    assert.notEqual(X.parseNum('1,5'), 1);
+    assert.equal(X.parseNum('0,532'), 0.532);
+    assert.equal(X.parseNum('1,5e-17'), 1.5e-17);
+    assert.equal(X.parseNum('1,234,567'), 1234567, 'thousands separators');
+    assert.equal(X.parseNum('1,064'), null, 'one comma and three digits: 1064 or 1.064, so neither');
+    assert.equal(X.parseNum('12abc'), null, 'parseFloat would give 12');
+    assert.equal(X.parseNum('1e'), null);
+    assert.equal(X.parseNum('abc'), null);
+    assert.equal(X.parseNum(''), null);
+    assert.equal(X.parseNum(null), null);
+    assert.equal(X.parseNum('1e400'), null, 'not finite');
+    assert.equal(X.parseNum(' 248.4 '), 248.4);
+    assert.equal(X.parseNum('−2'), -2, 'a typographic minus');
+    assert.equal(X.parseNum('.5'), 0.5);
+    assert.equal(X.parseNum('1E-17'), 1e-17);
+    assert.equal(X.parseNum('133.322368'), 133.322368, 'the pressure-unit factors of the form');
+    // a value copied from the page: "1.079 × 10⁻¹⁷", or "1.079 × 10−17" when the superscript is lost
+    assert.equal(X.parseNum('1.079 × 10⁻¹⁷'), 1.079e-17);
+    assert.equal(X.parseNum('1.079 × 10−17'), 1.079e-17);
+    assert.equal(X.parseNum('2x10^-3'), 0.002);
+});
+
+test('the message for a field that is not a number names the field', () => {
+    assert.equal(X.numError('248.4', 'wavelength'), '');
+    assert.equal(X.numError('1,5', 'pulse fluence'), '');
+    assert.equal(X.numError('', 'wavelength'), '', 'an empty field is not an error');
+    assert.equal(X.numError('abc', 'wavelength'), '“abc” is not a number (wavelength).');
+    assert.equal(X.numError('1,064', 'wavelength'), '“1,064” is ambiguous (wavelength): enter 1064 or 1.064 (decimal comma: 1,0640).');
+    assert.equal(X.numError('1e', 'cross section'), '', 'an exponent still being typed');
+    assert.equal(X.numError('1e-', 'cross section'), '');
+    assert.equal(X.numError('1e400', 'cross section'), 'That value is out of range (cross section).');
+});
+
+test('plot limits in the unit of the x axis', () => {
+    // 200 to 280 nm: 1239.841 984 / 280 = 4.428 eV to 1239.841 984 / 200 = 6.199 eV; 10⁷/280 = 35 714 to 10⁷/200 = 50 000 cm⁻¹
+    assert.deepEqual(X.limitsFromNm('nm', '200', '280'), { from: '200', to: '280' });
+    assert.deepEqual(X.limitsFromNm('eV', '200', '280'), { from: '4.428', to: '6.199' }, 'the ends swap: a longer wavelength is a lower energy');
+    assert.deepEqual(X.limitsFromNm('cm1', '200', '280'), { from: '35714', to: '50000' });
+    assert.deepEqual(X.limitsFromNm('eV', '', '400'), { from: '3.1', to: '' }, 'an open end stays open');
+    assert.deepEqual(X.limitsToNm('nm', '200', '280'), { min: '200', max: '280' });
+    // 4 eV is 309.9605 nm and 6.2 eV is 199.9745 nm
+    assert.deepEqual(X.limitsToNm('eV', '4', '6.2'), { min: '199.9745', max: '309.9605' });
+    assert.deepEqual(X.limitsToNm('cm1', '40000', '50000'), { min: '200', max: '250' });
+    assert.deepEqual(X.limitsToNm('nm', 'abc', '2,5e2'), { min: '', max: '250' }, 'text that is not a number leaves the end open');
+    assert.deepEqual(X.limitsToNm('eV', '0', '-3'), { min: '', max: '' }, 'no wavelength for zero or a negative value');
+    near(X.axisToNm('eV', X.X_AXES.eV.of(248.4)), 248.4, 1e-12, 'hc/λ is its own inverse');
+    near(X.axisToNm('cm1', 40000), 250, 1e-12);
+    assert.equal(X.axisText('eV', 248.4), '4.991');
+    assert.equal(X.axisText('cm1', 248.4), '40258');
+    assert.equal(X.axisText('nm', 121.567), '121.567');
+    assert.deepEqual(['nm', 'cm1', 'eV'].map((k) => X.X_AXES[k].unit), ['nm', 'cm⁻¹', 'eV']);
+});
+
+test('line labels that would pile up are left out', () => {
+    // labels 40 px wide at 0, 10, 20 and 100 px: the first is kept, the two within its width are not, the far one is
+    assert.deepEqual(X.keepLabels([{ px: 0, w: 40 }, { px: 10, w: 40 }, { px: 20, w: 40 }, { px: 100, w: 40 }]), [true, false, false, true]);
+    // the reader's own line always keeps its label, and is placed first
+    assert.deepEqual(X.keepLabels([{ px: 0, w: 40 }, { px: 10, w: 40, keep: true }, { px: 100, w: 40 }]), [false, true, true]);
+    // a lower rank is kept first
+    assert.deepEqual(X.keepLabels([{ px: 0, w: 40, rank: 3 }, { px: 10, w: 40, rank: 0 }, { px: 45, w: 40, rank: 1 }, { px: 60, w: 40, rank: 2 }]), [false, true, false, true]);
+    assert.deepEqual(X.keepLabels([]), []);
+    // every preset line has a rank, and no other wavelength does
+    assert.deepEqual([...X.LINE_RANK].sort((a, b) => a - b), X.LASER_LINES.map((L) => L.nm));
+});
