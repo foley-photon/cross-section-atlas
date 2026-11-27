@@ -154,15 +154,17 @@
             </div>
             <div id="xs-plot" class="xs-plot" role="img" aria-label="Absorption cross section against wavelength"></div>
             <p class="hint" id="xs-plot-note"></p>
+            <p class="xs-nodata" id="xs-gap" role="status" hidden></p>
             <div class="tc-actions"><button type="button" class="btn btn-secondary btn-sm" id="xs-csv">Download the shown datasets (CSV)</button></div>
         </div>
     </section>
     </div>
 
+    <div class="xs-tools">
     <section class="panel" aria-labelledby="xs-lines-h">
         <div class="panel-head"><h2 id="xs-lines-h">At a laser line</h2></div>
         <div class="panel-body">
-            <div class="field-row">
+            <div class="field-row xs-line-row">
                 <div class="field">
                     <label for="xs-lam">Wavelength</label>
                     <div class="input-unit"><input id="xs-lam" inputmode="decimal" autocomplete="off" spellcheck="false"><span class="unit">nm</span></div>
@@ -171,8 +173,17 @@
                     <label for="xs-fw">Line width (FWHM)</label>
                     <div class="input-unit"><input id="xs-fw" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0 = point value"><span class="unit">nm</span></div>
                 </div>
+                <div class="field xs-ph-field">
+                    <span class="field-label" id="xs-ph-l">Photons absorbed</span>
+                    <span class="seg xs-ph" id="xs-ph" role="radiogroup" aria-labelledby="xs-ph-l"><input type="radio" id="xs-ph1" name="xs-ph" value="1" checked><label for="xs-ph1">1</label><input type="radio" id="xs-ph2" name="xs-ph" value="2"><label for="xs-ph2">2</label><input type="radio" id="xs-ph3" name="xs-ph" value="3"><label for="xs-ph3">3</label></span>
+                </div>
+                <div class="field" id="xs-sc-f" hidden>
+                    <label for="xs-sc">Wavelength measured in</label>
+                    <select id="xs-sc" class="input"><option value="">air 200–2000 nm, vacuum outside</option><option value="air">air</option><option value="vac">vacuum</option></select>
+                </div>
             </div>
             <div class="xs-quick" id="xs-laser" aria-label="Laser lines"></div>
+            <div class="xs-mp" id="xs-mp" hidden></div>
             <div id="xs-at"></div>
             <p class="hint xs-to-who">Which gases absorb at this wavelength, and what takes the light in air: see <a href="#who">Who absorbs here?</a> below.</p>
             <p class="hint xs-scale">For scale, over 10&nbsp;cm at 1&nbsp;Torr and 296&nbsp;K: σ = 10⁻¹⁷&nbsp;cm² absorbs 96&nbsp;% of the light, 10⁻¹⁹&nbsp;cm² absorbs 3.2&nbsp;%, and 10⁻²¹&nbsp;cm² absorbs 0.033&nbsp;%. Strong allowed bands reach about 10⁻¹⁷&nbsp;cm²; <a href="#typical">typical values</a> are listed below.</p>
@@ -182,7 +193,7 @@
     <section class="panel" id="who" aria-labelledby="xs-who-h">
         <div class="panel-head"><h2 id="xs-who-h">Who absorbs here?</h2><span class="badge" id="xs-who-badge"></span></div>
         <div class="panel-body">
-            <p class="hint xs-who-lead">The molecules with data at the wavelength above, one dataset for each. The list opens on the gases of air, ordered by how much light each takes in air: its cross section times its share of the air. “By σ per molecule” orders them by cross section alone, and “All molecules” shows the rest that way.</p>
+            <p class="hint xs-who-lead" id="xs-who-lead">The molecules with data at the wavelength above, one dataset for each. The list opens on the gases of air, ordered by how much light each takes in air: its cross section times its share of the air. “By σ per molecule” orders them by cross section alone, and “All molecules” shows the rest that way.</p>
             <div class="field xs-air-ctl" id="xs-air-ctl">
                 <label for="xs-rh">Relative humidity of the air</label>
                 <div class="input-unit"><input id="xs-rh" inputmode="decimal" autocomplete="off" spellcheck="false"><span class="unit">%</span></div>
@@ -200,11 +211,13 @@
                     <li><strong>σ is per molecule.</strong> How much light a gas takes also depends on how much of it is there: a major gas with a small σ can absorb more than a trace gas with a large one. The air view therefore weights each σ by the gas’s share of the air, α = σ × mole fraction × number density of air at 1&nbsp;atm and 296&nbsp;K, and opens in the order of α. The shares and their sources are in the fold under the table. For another mixture, put σ, the partial pressure and the path into the calculator below.</li>
                     <li><strong>The line above the air table</strong> names the gas with the largest α, and a second gas within a factor of two of it, and adds up α over the gases with a value. An upper limit is listed with ≤ (and ≥ for its 1/e length) and left out of the sum. So is the O₂ value above 245&nbsp;nm; the line says what it would have given. A row with any other note, and every 2&nbsp;nm mean, shows α and the length with ≈, to two figures. Where a flagged value leads or carries a tenth of the sum or more, or the values are 2&nbsp;nm means, the figures are marked ≈, the line says why, and it gives the sum without the flagged values. The line says a gas “takes the most light” only when N₂, O₂ and H₂O all have a value in the sum and the leading value is not flagged. Otherwise it says “has the largest listed value” and names the main gases that are missing.</li>
                     <li><strong>Not listed</strong> means no data at this wavelength in these five collections. It does not mean the molecule is transparent there.</li>
+                    <li><strong>With 2 or 3 photons</strong> (set under “At a laser line”) the list ranks by the one-photon σ at λ/n, the wavelength of one photon with the energy of all n, as a locator of the excited states at that energy. It is not an n-photon cross section, and the air columns are left out: the beam itself is at λ, not at λ/n. See <a href="#multiphoton">Several photons and REMPI</a> below.</li>
                 </ul>
             </details>
         </div>
     </section>
 
+    <div class="xs-calcs">
     <section class="panel" aria-labelledby="xs-calc-h">
         <div class="panel-head"><h2 id="xs-calc-h">Absorption and photolysis</h2></div>
         <div class="panel-body">
@@ -254,17 +267,28 @@
             <div id="xs-conv"></div>
         </div>
     </section>
+    </div>
+    </div>
 
     <article class="prose xs-prose" id="how">
         <h2>How it works</h2>
         <ul>
-            <li><strong>Values between points</strong> are linear interpolations of the tabulated data. A value at a laser line with a width averages σ over a Gaussian of that full width at half maximum. If the data are tabulated more coarsely than the line, the tool says so: the average is then only an interpolation, and narrow structure (the bands of O₂, NO or SO₂) can make it wrong by large factors. A spectrum with more than 2000 points is thinned for the web to 2000 that keep its shape on a log scale; between the kept points, in banded or noisy regions, σ can differ from the source by large factors. At the preset laser lines the table therefore gives the point value of the full spectrum, which the build stores; anywhere else, and for a line with a width, it says when a value comes from a thinned spectrum.</li>
+            <li><strong>Values between points</strong> are linear interpolations of the tabulated data. A value at a laser line with a width averages σ over a Gaussian of that full width at half maximum. If the data are tabulated more coarsely than the line, the tool says so: the average is then only an interpolation, and narrow structure (the bands of O₂, NO or SO₂) can make it wrong by large factors. A spectrum with more than 2000 points is thinned for the web to 2000 that keep its shape on a log scale (a table of more than 50 000 points, to up to 5000), with points in every stretch of its range where the source has data; between the kept points, in banded or noisy regions, σ can differ from the source by large factors. At the preset laser lines the table therefore gives the point value of the full spectrum, which the build stores; anywhere else, and for a line with a width, it says when a value comes from a thinned spectrum.</li>
             <li><strong>Who absorbs here?</strong> The build picks one dataset per molecule for each wavelength by a fixed rule (measured before upper limit, optical before electron energy loss, points no more than 5&nbsp;nm apart, spectrum before single point or band maxima, natural sample before isotopologue, room temperature, recommended, newest, most points) and stores its σ at each preset laser line, read from the full spectrum, and its mean over each 2&nbsp;nm bin. With each value at a line it stores how far σ ranges among that dataset’s points within 0.25&nbsp;nm of the line (largest over smallest, where three or more points lie there and the ratio is 2 or more). The page sorts those values. It compares one dataset per molecule, not a consensus value.</li>
             <li><strong>Who absorbs here, in air.</strong> For each gas of the air view the page multiplies σ by the gas’s mole fraction x and by the number density of air, n = p/k<sub>B</sub>T = 2.479&nbsp;×&nbsp;10¹⁹&nbsp;cm⁻³ at 1&nbsp;atm and 296&nbsp;K (ideal gas): α = σxn, shown per meter, and the 1/e length is 1/α. Dry-air shares come from the 1976 U.S. Standard Atmosphere (N₂, O₂, H₂, and typical clean-air values near the surface for CO, O₃, NO₂, NO, SO₂ and NH₃) and from NOAA’s global surface means of mid 2026 (CO₂, CH₄, N₂O). Water vapor comes from the relative humidity: x = RH × p<sub>sat</sub>/p, with p<sub>sat</sub> = 2783&nbsp;Pa at 296&nbsp;K from the Antoine equation of the NIST Chemistry WebBook, and every dry-air share is multiplied by 1 − x. The sum of α runs over the gases with a value at the wavelength; upper limits are left out of it, and so is O₂ above 245&nbsp;nm, where its datasets do not agree.</li>
             <li><strong>Units.</strong> ε (base 10) = σN<sub>A</sub>/(1000 ln 10); ε (base e) = σN<sub>A</sub>/1000; k (cm⁻¹ atm⁻¹ at 273.15 K) = σn₀, with Loschmidt's constant n₀ = 2.686 780 111 × 10¹⁹ cm⁻³ (CODATA 2022). Physicists' units: 1 Mb = 10⁻¹⁸ cm², 1 barn = 10⁻²⁴ cm², 1 Å² = 10⁻¹⁶ cm², a₀² = 2.800 285 × 10⁻¹⁷ cm², and the oscillator-strength density df/dE = σ/(2π²r<sub>e</sub>ħc), so σ in Mb ≈ 109.76 × df/dE in eV⁻¹ (Berkowitz's convention for VUV photoabsorption).</li>
             <li><strong>Beer–Lambert.</strong> n = p/k<sub>B</sub>T, τ = σnL, transmitted fraction e<sup>−τ</sup>, absorbance τ/ln 10.</li>
             <li><strong>Photolysis per pulse.</strong> Photon fluence Φ = F/(hc/λ); fraction excited 1 − e<sup>−σΦ</sup>, fraction photolyzed 1 − e<sup>−σΦφ</sup>, for an optically thin sample and one-photon absorption. The saturation fluence hν/σ is where a fraction 1 − 1/e of the molecules has absorbed. The photolyzed fraction assumes that a molecule which absorbs and does not dissociate is back in the ground state within the pulse; if it is not, the fraction is φ(1 − e<sup>−σΦ</sup>), the same at low fluence and smaller near saturation.</li>
             <li><strong>Temperature.</strong> Where one series (one paper's files of the same resolution, pressure and version) was measured at several temperatures, σ at an intermediate temperature is interpolated linearly in T from the same values the table shows, never extrapolated.</li>
+        </ul>
+        <h2 id="multiphoton">Several photons and REMPI</h2>
+        <p>Every table here is a one-photon cross section: the chance that a molecule takes up a single photon of the wavelength on the axis. A molecule can show nothing at a laser line and still be excited there by two or three photons at once, as in resonance-enhanced multiphoton ionization (REMPI). Carbon monoxide at 230&nbsp;nm is the standard case.</p>
+        <ul>
+            <li><strong>One photon of 230&nbsp;nm.</strong> CO’s tables in the five collections end at 166.6&nbsp;nm, so the plot and the laser-line table show nothing at 230&nbsp;nm. That is the physics, not a gap in the page: the first allowed band of CO, A&nbsp;¹Π&nbsp;←&nbsp;X (the fourth positive system), starts at 154.4&nbsp;nm (its (0,0) band origin, 64&nbsp;748.48&nbsp;cm⁻¹). Between 154.4 and 206.3&nbsp;nm CO has only weak forbidden bands (I&nbsp;¹Σ⁻&nbsp;←&nbsp;X at 154.9&nbsp;nm and bands to its triplet states), which the tables here do not cover past 166.6&nbsp;nm. Its lowest excited state, a&nbsp;³Π, is reached only in the spin-forbidden Cameron bands, whose (0,0) band lies at 206.3&nbsp;nm (48&nbsp;473.22&nbsp;cm⁻¹); at 230&nbsp;nm cold CO has no electronic band at all.</li>
+            <li><strong>Two photons of 230&nbsp;nm.</strong> The (2+1) REMPI scheme of CO excites B&nbsp;¹Σ⁺&nbsp;(v&nbsp;=&nbsp;0) with two photons near 230.1&nbsp;nm (Tjossem and Smyth, 1989), and a third photon ionizes it. The band origin, 86&nbsp;916.16&nbsp;cm⁻¹, is two photons of 230.107&nbsp;nm in vacuum (230.036&nbsp;nm in standard air), and three photons carry 16.2&nbsp;eV, above the ionization energy of 14.01&nbsp;eV. Two photons of λ carry the energy of one photon of λ/2, so the B state sits at 115.05&nbsp;nm on the one-photon axis. Set Photons absorbed to 2: the plot marks λ/2, the laser-line table adds σ there, and Who absorbs here? ranks the molecules at λ/2.</li>
+            <li><strong>Air and vacuum.</strong> Photon energy is hc/λ with the vacuum wavelength, so an air wavelength is converted to vacuum first and then divided by n: 230.000&nbsp;nm in air is 230.071&nbsp;nm in vacuum, and two of its photons equal one of 115.035&nbsp;nm. The conversion uses the dispersion of standard air of Peck and Reeder (1972); the air formula holds from 185 to 1700&nbsp;nm, the range of their fit. By default a wavelength from 200 to 2000&nbsp;nm is read as an air wavelength and one outside that range as a vacuum wavelength, as the NIST Atomic Spectra Database lists them, and the field “Wavelength measured in” changes that. An air wavelength outside 185 to 1700&nbsp;nm is read as vacuum, and the box under the field says so. The VUV datasets, where λ/n lands, are on the vacuum scale.</li>
+            <li><strong>What the value at λ/n is, and is not.</strong> The one-photon spectrum at λ/n shows which excited states lie at the energy n photons deliver, which is where an n-photon resonance can occur. It is not an n-photon cross section, which is a different quantity (for two photons in cm⁴&nbsp;s) with its own selection rules. Two photons connect states of the same parity (g&nbsp;↔&nbsp;g and u&nbsp;↔&nbsp;u in a molecule with a center of symmetry, where one photon needs g&nbsp;↔&nbsp;u) and allow ΔΛ&nbsp;=&nbsp;±2 (Σ&nbsp;↔&nbsp;Δ). So a strong one-photon band can be weak with two photons, and a state dark to one photon can carry a strong two-photon band. CO’s B&nbsp;←&nbsp;X is allowed both ways (Σ⁺&nbsp;↔&nbsp;Σ⁺ in a molecule without a center of symmetry), which is why it is both a VUV absorption band and a good REMPI line.</li>
+            <li><strong>Measured REMPI lines</strong>, with the wavelengths in air and vacuum, the ionization step and the papers, are in <a href="/tools/rempi-schemes/">REMPI Schemes</a>, CO among them.</li>
         </ul>
         <h2 id="typical">Typical values</h2>
         <p>The rows below span almost seven orders of magnitude. Each row can be reproduced above: pick the molecule, press the laser line, and read the first row of the table. The last column is the share of the light absorbed by 1&nbsp;Torr of the gas at 296&nbsp;K over 10&nbsp;cm, from the absorption calculator.</p>
@@ -315,6 +339,12 @@
             <li>P. F. Bernath, <em>Spectra of Atoms and Molecules</em>, 2nd ed., Oxford University Press (2005), sec. 1.3, “Beer’s Law,” pp. 19–21 (the absorption cross section in cm² per molecule, and its relation to the decadic molar absorption coefficient).</li>
             <li>H. H. Telle and Á. González Ureña, <em>Laser Spectroscopy and Laser Imaging: An Introduction</em>, CRC Press (2018), sec. 7.1, “Concepts of Linear Absorption Spectroscopy,” pp. 163–164 (the Beer–Lambert law written with a cross section and a number density, as used here for the optical depth).</li>
             <li>W. M. Haynes (ed.), <em>CRC Handbook of Chemistry and Physics</em>, 97th ed., CRC Press (2017), sec. 1, “Fundamental Physical Constants,” p. 1-6 (the Loschmidt constant behind the cm⁻¹&nbsp;atm⁻¹ conversion), and sec. 10, “Index of Refraction of Air,” p. 10-255 (the standard-air table behind the air and vacuum note above).</li>
+        </ul>
+        <h3>Several photons and REMPI</h3>
+        <ul class="refs">
+            <li>P. J. H. Tjossem and K. C. Smyth, “Multiphoton excitation spectroscopy of the B ¹Σ⁺ and C ¹Σ⁺ Rydberg states of CO,” <em>J. Chem. Phys.</em> <strong>91</strong>, 2041–2048 (1989), <a href="https://doi.org/10.1063/1.457064" target="_blank" rel="noopener">doi:10.1063/1.457064</a> (CO two-photon B&nbsp;←&nbsp;X (0,0) at 230&nbsp;nm, detected by ionization).</li>
+            <li>K. P. Huber and G. Herzberg, <em>Molecular Spectra and Molecular Structure IV: Constants of Diatomic Molecules</em>, Van Nostrand Reinhold (1979), as given in the NIST Chemistry WebBook, <a href="https://webbook.nist.gov/cgi/cbook.cgi?ID=C630080&amp;Mask=1000" target="_blank" rel="noopener">carbon monoxide, constants of diatomic molecules</a> (the band origins ν₀₀ of CO: a&nbsp;³Π&nbsp;←&nbsp;X 48&nbsp;473.22, A&nbsp;¹Π&nbsp;←&nbsp;X 64&nbsp;748.48 and B&nbsp;¹Σ⁺&nbsp;←&nbsp;X 86&nbsp;916.16&nbsp;cm⁻¹, and the CO⁺ series limit 113&nbsp;029&nbsp;cm⁻¹, 14.01&nbsp;eV).</li>
+            <li>E. R. Peck and K. Reeder, “Dispersion of air,” <em>J. Opt. Soc. Am.</em> <strong>62</strong>, 958–962 (1972), <a href="https://doi.org/10.1364/JOSA.62.000958" target="_blank" rel="noopener">doi:10.1364/JOSA.62.000958</a> (the refractive index of standard air used to turn an air wavelength into a vacuum one).</li>
         </ul>
         <h3>Composition of air</h3>
         <ul class="refs">

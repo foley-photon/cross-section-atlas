@@ -11,6 +11,7 @@ import {
     parseNum, numError, axisText, limitsToNm, limitsFromNm, keepLabels, LINE_RANK,
     refLabel, AIR_GASES, lineKey, whoAtLine, whoCoarse, whoView, whoNotes, whoDoubt, tempText,
     AIR, AIR_DRY, AIR_SOURCES, AIR_ARGON, waterSaturation, airAbsorption, fractionText, pathText,
+    PHOTONS, multiphoton, nmText, lineKeyNear, coverage, noDataText,
 } from './xsec.js';
 
 const $ = (id) => document.getElementById(id);
@@ -29,7 +30,8 @@ const WHO_TOP = 25;
 const cache = new Map();   // dataset id → [[λ, σ], …]
 const inflight = new Map(); const failed = new Set();
 let filter = '';   // the dataset list's filter: '' (all), 'rec' or a source key; not part of the link
-const state = { k: '', on: [], x: 'nm', y: 'cm2', log: true, lines: false, min: '', max: '', lam: '248.4', fw: '', who: 'air', ws: '', rh: String(AIR.rh), sig: '', p: '1', pu: '133.322368', T: '296', L: '10', F: '10', phi: '1', cv: '1e-17', cu: 'cm2' };
+// ph: photons absorbed at the laser line (1, 2 or 3); sc: the scale the laser wavelength is given in ('' air from 200 to 2000 nm and vacuum outside, 'air', 'vac')
+const state = { k: '', on: [], x: 'nm', y: 'cm2', log: true, lines: false, min: '', max: '', lam: '248.4', fw: '', ph: '1', sc: '', who: 'air', ws: '', rh: String(AIR.rh), sig: '', p: '1', pu: '133.322368', T: '296', L: '10', F: '10', phi: '1', cv: '1e-17', cu: 'cm2' };
 
 /* ── formatting ─────────────────────────────────────────────────────── */
 const sci = formatSci;
@@ -46,6 +48,13 @@ const doiLink = (r) => (r && r.doi ? ` <a href="https://doi.org/${esc(r.doi)}" t
 const tText = tempText;
 const srcName = (s) => ((meta.sources || {})[s] || { short: s }).short || s;
 const getJSON = async (url) => { const r = await fetch(url); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); };
+/** The number of photons the page is set to (1 when the link names another). */
+const nPh = () => (PHOTONS.includes(+state.ph) ? +state.ph : 1);
+/** The laser line with its photons: multiphoton() of the wavelength field, or null when the field holds no wavelength. */
+const mpNow = () => { const lam = num(state.lam); return numError(state.lam, 'wavelength') ? null : multiphoton(lam, nPh(), state.sc); };
+/** The wavelength the reverse lookup and the no-data line use: λ for one photon, λ/n (vacuum) for several. */
+const lookNm = (m) => (m.n > 1 ? m.target : m.nm);
+const lookText = (m) => (m.n > 1 ? nmText(m.target) : String(m.nm));
 
 /* ── URL state ──────────────────────────────────────────────────────── */
 function readURL() {
@@ -62,6 +71,8 @@ function writeURL() {
     if (state.ws === 'sig') p.set('ws', 'sig');   // the air view ordered by σ per molecule, not by absorption in air
     if (state.rh !== String(AIR.rh)) p.set('rh', state.rh);
     for (const k of ['x', 'y', 'min', 'max', 'lam', 'fw']) if (state[k] && !(k === 'x' && state[k] === 'nm') && !(k === 'y' && state[k] === 'cm2')) p.set(k, state[k]);
+    if (nPh() > 1) p.set('ph', String(nPh()));
+    if (state.sc) p.set('sc', state.sc);
     if (!state.log) p.set('log', '0'); if (state.lines) p.set('lines', '1');
     try { history.replaceState(null, '', `${location.pathname}?${p.toString()}${location.hash}`); } catch { /* sandbox */ }
 }
@@ -275,7 +286,7 @@ function renderPlot() {
         return { type: pts.length < 3 ? 'points' : 'line', x: pts.map((p) => conv(p[0])), y, color: s.color, label: `${refText(s.meta.ref)} ${tText(s.meta.T)}${s.more ? `, ${s.more}` : ''}`.replace(/<[^>]+>/g, '') };
     }).filter((s) => s.y.some(Number.isFinite));
     const limErr = numError($('xs-min').value, 'From') || numError($('xs-max').value, 'To');
-    if (!series.length) { Plot.clear(el); $('xs-plot-note').textContent = `${limErr ? `${limErr} ` : ''}No data in this range.`; return; }
+    if (!series.length) { Plot.clear(el); $('xs-plot-note').textContent = `${limErr ? `${limErr} ` : ''}${emptyRangeText(lo, hi, sets)}`; return; }
     // Line labels are in the unit of the axis (4.991 eV, not 248.4, on the photon-energy axis). Where the lines crowd
     // (thirteen of them between 2 and 10 eV), a label within the width of one already kept is left out; the line stays.
     const unit = (X_AXES[state.x] || X_AXES.nm).unit; const lineText = (nm) => (state.x === 'nm' ? String(nm) : `${axisText(state.x, nm)} ${unit}`);
@@ -284,6 +295,9 @@ function renderPlot() {
     const lam = num(state.lam);
     const vlines = state.lines ? LASER_LINES.filter((L) => inPlot(L.nm) && L.nm !== lam).map((L) => ({ x: conv(L.nm), label: lineText(L.nm), color: 'var(--muted)', rank: LINE_RANK.indexOf(L.nm) })) : [];   // the reader's own line, drawn next, stands for a preset at the same wavelength
     if (lam > 0 && inPlot(lam)) vlines.push({ x: conv(lam), label: state.x === 'nm' ? `${lam} nm` : lineText(lam), color: 'var(--accent)', keep: true });
+    // several photons: the energy of all n, as the vacuum wavelength of one photon (λ_vac/n)
+    const mp = mpNow();
+    if (mp && mp.n > 1 && inPlot(mp.target)) vlines.push({ x: conv(mp.target), label: state.x === 'nm' ? `${mp.n} photons of ${lam} nm ≙ ${nmText(mp.target)} nm (vac)` : `${mp.n} × hν = ${axisText(state.x, mp.target)} ${unit}`, color: 'var(--warn)', keep: true });
     const plotW = Math.max(160, (el.clientWidth || 640) - 80);   // the drawn width, near enough to tell which labels would pile up
     const keep = keepLabels(vlines.map((v) => ({ px: xb > xa ? ((v.x - xa) / (xb - xa)) * plotW : 0, w: 7.2 * v.label.length + 12, keep: !!v.keep, rank: v.rank })));
     const dropped = keep.filter((k) => !k).length;
@@ -297,7 +311,7 @@ function renderPlot() {
     });
     draw(380);
     const steps = sets.map((s) => medianStep(s.data)).filter(Boolean);
-    $('xs-plot-note').textContent = `${limErr ? `${limErr} ` : ''}${series.length} dataset${series.length === 1 ? '' : 's'}${steps.length ? `; tabulated spacing ${Math.min(...steps).toPrecision(2)}–${Math.max(...steps).toPrecision(2)} nm` : ''}. Spectra may be thinned for the web (at most 2 000 points each, keeping peaks; narrow windows between bands can be lost); the download gives the points as shipped.${hidden ? ` ${hidden} point${hidden === 1 ? '' : 's'} more than 12 decades below the largest value shown ${hidden === 1 ? 'is' : 'are'} left out of the log plot.` : ''}${dropped ? ` ${dropped} laser-line label${dropped === 1 ? ' is' : 's are'} left out where the lines crowd; the buttons under “At a laser line” name every line.` : ''}`;
+    $('xs-plot-note').textContent = `${limErr ? `${limErr} ` : ''}${series.length} dataset${series.length === 1 ? '' : 's'}${steps.length ? `; tabulated spacing ${Math.min(...steps).toPrecision(2)}–${Math.max(...steps).toPrecision(2)} nm` : ''}. Spectra may be thinned for the web (to 2 000 points each, up to 5 000 for the largest tables, keeping peaks and the valleys between them over the whole range; narrow windows between bands can be lost); the download gives the points as shipped.${hidden ? ` ${hidden} point${hidden === 1 ? '' : 's'} more than 12 decades below the largest value shown ${hidden === 1 ? 'is' : 'are'} left out of the log plot.` : ''}${dropped ? ` ${dropped} laser-line label${dropped === 1 ? ' is' : 's are'} left out where the lines crowd; the buttons under “At a laser line” name every line.` : ''}${mp && mp.n > 1 ? ` ${inPlot(mp.target) ? `The line labeled “${state.x === 'nm' ? `${mp.n} photons of` : `${mp.n} × hν`}” marks` : 'Outside the data on this plot:'} ${nmText(mp.target)} nm (vacuum), the energy of ${mp.n} photons of ${lam} nm; the one-photon spectrum there shows the excited states at that energy, where a ${mp.n}-photon resonance may occur (${mp.n}-photon selection rules differ). See “At a laser line”.` : ''}`;
     // Beside the picker the panel sticks below the header, so it may not be taller than the viewport leaves there (8 px kept at the
     // bottom): a chart that makes it overflow is drawn again shorter, down to the 230 px plot.js keeps. Elsewhere the panel's top is 'auto'.
     const panel = el.closest('.xs-spectrum'); const top = parseFloat(getComputedStyle(panel).top);
@@ -306,6 +320,49 @@ function renderPlot() {
         const h = over > 0 ? el.querySelector('svg').getBoundingClientRect().height : 0;
         if (h > 230) draw(Math.max(230, h - over));
     }
+}
+
+/**
+ * Why the plot is empty between the From and To limits (lo, hi in nm, null for an open end), for the shown datasets
+ * `sets`: a shown dataset spans the range but has no tabulated point in it (or none above zero, on the log axis);
+ * other datasets of this molecule span it and are not shown; or none of its datasets reaches the range (then the
+ * nearest edges of its tables).
+ */
+function emptyRangeText(lo, hi, sets = []) {
+    const hit = (l) => Array.isArray(l) && (lo == null || l[1] >= lo) && (hi == null || l[0] <= hi);
+    if (sets.some((x) => hit(x.meta && x.meta.l))) return `The shown datasets have no tabulated point in this range${state.log ? ' (or none above zero, on the log axis)' : ''}.`;
+    const s = byKey.get(state.k); if (!s || !s.sets || !s.sets.length) return 'No data in this range.';
+    const others = s.sets.filter((x) => !state.on.includes(x.id) && hit(x.l)).length;
+    if (others) return `No data in this range in the shown datasets; ${others} other dataset${others === 1 ? '' : 's'} of ${s.f} ${others === 1 ? 'has' : 'have'} data here: tick ${others === 1 ? 'it' : 'them'} in the list.`;
+    // the nearest table edges: where the tables below the range end and those above it start
+    const ls = s.sets.map((x) => x.l).filter(Array.isArray);
+    const ends = ls.map((l) => l[1]).filter((b) => lo != null && b < lo); const starts = ls.map((l) => l[0]).filter((a) => hi != null && a > hi);
+    const b = ends.length ? Math.max(...ends) : null; const a = starts.length ? Math.min(...starts) : null;
+    if (a == null && b == null) return 'No data in this range.';
+    const where = b != null && a != null ? `its tables stop at ${nmText(b, 1)} nm and start again at ${nmText(a, 1)} nm` : b != null ? `its tables end at ${nmText(b, 1)} nm` : `its tables start at ${nmText(a, 1)} nm`;
+    return `No dataset of ${s.f} has data in this range; ${where}. Outside its tables the five collections hold no value for ${s.f}, which is not the same as no absorption.`;
+}
+/** The line in the spectrum panel that says when no dataset of the molecule reaches the laser line (or λ/n, with several photons). */
+function renderGap() {
+    const el = $('xs-gap'); const s = byKey.get(state.k); const m = mpNow();
+    const cov = s && s.sets && m ? coverage(s.sets, lookNm(m)) : null;
+    el.hidden = !cov;
+    el.innerHTML = cov ? noDataText(F(s.f), s.k, lookNm(m), cov, m.n, lookText(m)) : '';
+}
+/** Several photons: the box under the laser-line field that says what n photons carry and what the page does with it. */
+function renderMp() {
+    const n = nPh(); const box = $('xs-mp'); const m = n > 1 ? mpNow() : null;
+    $('xs-sc-f').hidden = n === 1;
+    box.hidden = !m;
+    if (!m) { box.innerHTML = ''; return; }
+    const lam = m.nm; const t = nmText(m.target);
+    const scale = m.air ? `${lam} nm in air is ${nmText(m.vac, 3)} nm in vacuum, so λ/${n} = ${nmText(m.target, 3)} nm`
+        : m.outside ? `${lam} nm is read as a vacuum wavelength (the air formula holds from 185 to 1700 nm), so λ/${n} = ${nmText(m.target, 3)} nm`
+            : `${lam} nm is read as a vacuum wavelength, so λ/${n} = ${nmText(m.target, 3)} nm`;
+    const rules = n === 2 ? 'Two-photon absorption has its own selection rules (in a molecule with a center of symmetry it connects g ↔ g and u ↔ u, where one photon needs g ↔ u, and it allows ΔΛ = 0, ±1 and ±2), and its cross section is another quantity, in cm⁴ s.'
+        : 'Three-photon absorption has its own selection rules and cross section. Above a molecule’s ionization energy the one-photon σ at λ/3 is mostly ionization, not a bound state. For a (2+1) scheme set 2: the resonance takes two photons, and the third ionizes.';
+    box.innerHTML = `<p><strong>${n} photons of ${lam} nm carry ${m.cm1.toFixed(0)} cm⁻¹ (${m.eV.toFixed(3)} eV), the energy of one ${t} nm photon.</strong> ${scale} (vacuum).</p>
+    <p>The plot marks ${t} nm, the table adds each dataset’s one-photon σ there, and <a href="#who">Who absorbs here?</a> ranks the molecules at ${t} nm. The one-photon σ at λ/${n} shows which excited states lie at that energy, where a ${n}-photon resonance may occur: it is a locator, not a ${n}-photon cross section. ${rules} Measured REMPI lines: <a href="/tools/rempi-schemes/">REMPI Schemes</a>.</p>`;
 }
 
 /* ── values at a laser line ─────────────────────────────────────────── */
@@ -317,12 +374,20 @@ function renderAt() {
     if (!sets.length) { out.innerHTML = ''; return; }
     const yu = SIGMA_UNITS[state.y]; const alt = state.y !== 'cm2';   // a second value column only when the plot's unit is not cm²
     const thinNote = (m) => `thinned to ${m.np} of ${m.n0} points for the web; check the source`;
+    // several photons: each dataset's one-photon σ at λ/n as a point value (a locator; the line width is not applied there)
+    const mp = nPh() > 1 ? mpNow() : null; const mt = mp ? nmText(mp.target) : '';
+    const mpCell = (s) => {
+        if (!mp) return '';
+        const v = tableValue(s.meta, s.data, mp.target, 0);
+        const flag = v.sigma == null ? '' : v.at != null ? ` <span class="tc-state">at ${v.at} nm</span>` : v.thinned ? ' <span class="tc-state">thinned</span>' : '';
+        return `<td class="num xs-a-mp" data-l="at ${mt} nm:">${sci(v.sigma)}${flag}</td>`;
+    };
     const rows = sets.map((s) => {
         const r = tableValue(s.meta, s.data, lam, fw);
         const warn0 = r.at != null ? `measured at ${r.at} nm only${r.sigma == null ? '' : ' (nearest value, not interpolated)'}` : r.sigma == null ? 'outside the data' : r.full ? `from the full ${s.meta.n0}-point spectrum; the plot is thinned` : fw > 0 && r.covered < 0.99 ? `line only ${(100 * r.covered).toFixed(0)} % inside the data` : r.coarse ? `data spacing ${medianStep(s.data).toPrecision(2)} nm${fw > 0 ? ' is wider than the line' : ''}: interpolated` : '';
         // a thinned spectrum can be far off between its kept points (banded or noisy regions): say so wherever a value from it is shown
         const warn = [s.meta.ul && r.sigma != null ? 'upper limit' : '', warn0, r.thinned ? thinNote(s.meta) : ''].filter(Boolean).join('; ');
-        return `<tr><td class="xs-a-ref"><span class="xs-swatch" style="background:${s.color}"></span> ${refText(s.meta.ref)}${s.meta.rec ? ' <span class="tc-tag xs-rec">rec.</span>' : ''}${s.more ? ` <span class="tc-state xs-a-more">${esc(s.more)}</span>` : ''}</td><td class="num xs-a-T">${esc(tText(s.meta.T))}</td><td class="num xs-a-sig">${sci(r.sigma)}</td>${alt ? `<td class="num xs-a-alt" data-u="${esc(yu.label)}">${r.sigma != null ? sci(yu.to(r.sigma)) : ''}</td>` : ''}<td class="tc-state xs-a-note">${esc(warn)}</td><td class="xs-a-use"><button type="button" class="btn btn-ghost btn-sm" data-use="${r.sigma ?? ''}"${r.sigma == null ? ' disabled' : ''}>use ›</button></td></tr>`;
+        return `<tr><td class="xs-a-ref"><span class="xs-swatch" style="background:${s.color}"></span> ${refText(s.meta.ref)}${s.meta.rec ? ' <span class="tc-tag xs-rec">rec.</span>' : ''}${s.more ? ` <span class="tc-state xs-a-more">${esc(s.more)}</span>` : ''}</td><td class="num xs-a-T">${esc(tText(s.meta.T))}</td><td class="num xs-a-sig">${sci(r.sigma)}</td>${alt ? `<td class="num xs-a-alt" data-u="${esc(yu.label)}">${r.sigma != null ? sci(yu.to(r.sigma)) : ''}</td>` : ''}${mpCell(s)}<td class="tc-state xs-a-note">${esc(warn)}</td><td class="xs-a-use"><button type="button" class="btn btn-ghost btn-sm" data-use="${r.sigma ?? ''}"${r.sigma == null ? ' disabled' : ''}>use ›</button></td></tr>`;
     }).join('');
     // temperature interpolation: each shown dataset's series (the same file series at other temperatures, seriesKey),
     // with the same values as the table (point value or line average, full resolution where the build stored it)
@@ -344,8 +409,8 @@ function renderAt() {
         }).filter((x) => x.r);
         if (hits.length) tline = `<p class="hint">At ${T} K (the gas temperature below), interpolated in T from the same values: ${hits.map(({ g, r, thin }) => `${refText(g[0].meta.ref)} ${sci(r.sigma)} cm² (between ${r.T0} and ${r.T1} K${thin ? '; from thinned spectra, check the source' : ''})`).join('; ')}.</p>`;
     }
-    out.innerHTML = `<div class="xs-at-wrap"><table class="tc-table xs-at"><thead><tr><th>Dataset</th><th class="num">T</th><th class="num">σ, cm²</th>${alt ? `<th class="num">${esc(yu.label)}</th>` : ''}<th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="hint">${fw > 0 ? `Averaged over a Gaussian line of ${fw} nm FWHM.` : 'Point values, linearly interpolated (at a preset laser line, a thinned dataset gives the value of its full spectrum).'} ${lam} nm = ${nmToCm1(lam).toFixed(1)} cm⁻¹ = ${nmToEV(lam).toFixed(4)} eV. “use ›” copies σ into the absorption calculator.</p>${tline}`;
+    out.innerHTML = `<div class="xs-at-wrap"><table class="tc-table xs-at"><thead><tr><th>Dataset</th><th class="num">T</th><th class="num">σ, cm²</th>${alt ? `<th class="num">${esc(yu.label)}</th>` : ''}${mp ? `<th class="num">σ at ${mt} nm, cm²</th>` : ''}<th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="hint">${fw > 0 ? `Averaged over a Gaussian line of ${fw} nm FWHM.` : 'Point values, linearly interpolated (at a preset laser line, a thinned dataset gives the value of its full spectrum).'} ${mp && mp.air ? `${lam} nm in air (${nmText(mp.vac, 3)} nm in vacuum) = ${nmToCm1(mp.vac).toFixed(1)} cm⁻¹ = ${nmToEV(mp.vac).toFixed(4)} eV per photon.` : `${lam} nm = ${nmToCm1(lam).toFixed(1)} cm⁻¹ = ${nmToEV(lam).toFixed(4)} eV.`} “use ›” copies σ into the absorption calculator.${mp ? ` The column “σ at ${mt} nm” is each dataset’s one-photon σ at the energy of ${mp.n} photons, a point value: it locates one-photon-allowed excited states at the energy of ${mp.n} photons and is not a ${mp.n}-photon cross section, so “use ›” copies only the value at ${lam} nm. In a banded or thinned spectrum it can be far off; check the plot.` : ''}</p>${tline}`;
 }
 document.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-use]'); if (!b || !b.dataset.use) return;
@@ -413,23 +478,27 @@ function airFold(A, rh, open) {
  * view weights each σ by the gas's share of the air (airAbsorption) and opens ordered by that.
  */
 function renderWho() {
-    const out = $('xs-who'); const lam = num(state.lam);
-    const ok = !numError(state.lam, 'wavelength') && lam > 0;
-    $('xs-who-badge').textContent = ok ? `${lam} nm` : '';
+    const out = $('xs-who'); const mp = mpNow();
+    const ok = !!mp;
+    // with several photons the lookup is at λ/n (vacuum), the energy of all n photons; everything below says that wavelength
+    const n = ok ? mp.n : 1; const multi = n > 1;
+    const lam = ok ? lookText(mp) : '';
+    $('xs-who-badge').textContent = !ok ? '' : multi ? `${n} × hν at ${mp.nm} nm → ${lam} nm` : `${lam} nm`;
     if (!ok) { out.innerHTML = '<p class="tc-msg">Enter a wavelength under “At a laser line”.</p>'; return; }
-    const key = lineKey(lam); const name = key ? 'who' : 'coarse';
+    const key = multi ? lineKeyNear(mp.target) : lineKey(mp.nm); const name = key ? 'who' : 'coarse';
     if (whoState[name] !== 'ok') {
         loadWho(name);
         out.innerHTML = whoState[name] === 'missing' ? '<p class="tc-msg">This copy of the data has no table for the reverse lookup. Pick a molecule at the top of the page to read its value here.</p>' : '<p class="tc-msg">Loading the table…</p>';
         return;
     }
-    const all = (key ? whoAtLine(who, key) : whoCoarse(coarse, lam)).filter((r) => byKey.has(r.k));
+    const all = (key ? whoAtLine(who, key) : whoCoarse(coarse, lookNm(mp))).filter((r) => byKey.has(r.k));
     const air = state.who !== 'all'; const view = whoView(all, air);
     const had = out.contains(document.activeElement) ? document.activeElement.dataset : {};   // the button that had focus is rebuilt below
-    // the air view: each σ weighted by the gas's share of air at 1 atm and 296 K, and ordered by that unless the reader asks for σ
+    // the air view: each σ weighted by the gas's share of air at 1 atm and 296 K, and ordered by that unless the reader asks for σ.
+    // Not with several photons: the beam is at λ, and σ at λ/n says nothing about what the air takes from it.
     const rh = num(state.rh);
-    const rhErr = !air ? '' : numError(state.rh, 'relative humidity') || (rh == null || rh < 0 || rh > 100 ? 'Enter a relative humidity from 0 to 100 %.' : '');
-    const A = air && !rhErr ? airAbsorption(view.rows, rh) : null;
+    const rhErr = !air || multi ? '' : numError(state.rh, 'relative humidity') || (rh == null || rh < 0 || rh > 100 ? 'Enter a relative humidity from 0 to 100 %.' : '');
+    const A = air && !multi && !rhErr ? airAbsorption(view.rows, rh) : null;
     const inAir = A ? new Map(A.rows.map((r) => [r.k, r])) : null;
     const byAir = !!A && state.ws !== 'sig';
     const foldOpen = !!out.querySelector('.xs-air-fold')?.open;
@@ -463,8 +532,13 @@ function renderWho() {
     const loaded = whoFrom && whoFrom === state.k && whoLam === state.lam ? `<p class="hint xs-who-msg" role="status">${F(byKey.get(state.k).f)} is loaded with that dataset: its values are in the table above, its spectrum is in <a href="#xs-plot-h">the plot</a>.</p>` : '';
     const take = A ? airTakeaway(A, lam, view.missing) : rhErr ? bad(rhErr) : '';
     const cond = A && shown.length ? `<p class="hint xs-air-cond">Air at 1 atm and ${AIR.T} K as an ideal gas, n = ${sci(A.n)} cm⁻³, at ${esc(state.rh.trim())} % <a href="#xs-rh">relative humidity</a> (${A.water > 0 ? `${fractionText(A.water)} water vapor` : 'dry air'}). α = σ × mole fraction × n, and the 1/e length is 1/α.${byAir ? '' : ' The list is in the order of σ per molecule.'}</p>` : '';
-    $('xs-air-ctl').hidden = !air;
-    out.innerHTML = `${chips}${sort}${loaded}${take}${table}${more}${cond}${A ? airFold(A, rh, foldOpen) : ''}<p class="hint">${count}</p><p class="hint">${kind}${kind && num(state.fw) > 0 ? ' The line width is not applied in this table.' : ''}${shown.length ? ` Press a molecule to load it${shown.some((r) => r.k === state.k) ? '; the shaded row is the one on the plot' : ''}.` : ''}</p>`;
+    $('xs-air-ctl').hidden = !air || multi;
+    $('xs-who-lead').hidden = multi;   // it describes the one-photon air view; the box below says what the list is instead
+    const lead = multi ? `<p class="xs-who-take xs-who-mp"><strong>Ranked by the one-photon σ at ${lam} nm, the energy of ${n} photons of ${mp.nm} nm.</strong> The list shows which molecules have one-photon-allowed excited states at that energy, where a ${n}-photon resonance may occur. The ranking is by one-photon σ, a locator, not a ${n}-photon cross section: ${n}-photon absorption has its own selection rules and strengths. ${air ? `The air columns are left out, since the beam itself is at ${mp.nm} nm. ` : ''}Measured REMPI lines: <a href="/tools/rempi-schemes/">REMPI Schemes</a>.</p>` : '';
+    // the molecule on the plot, when none of its datasets reaches this wavelength: say so here too, not only by its absence
+    const cur = byKey.get(state.k); const cov = cur && cur.sets ? coverage(cur.sets, lookNm(mp)) : null;
+    const gap = cov ? `<p class="xs-nodata">${noDataText(F(cur.f), cur.k, lookNm(mp), cov, n, lam)}</p>` : '';
+    out.innerHTML = `${chips}${sort}${lead}${gap}${loaded}${take}${table}${more}${cond}${A ? airFold(A, rh, foldOpen) : ''}<p class="hint">${count}</p><p class="hint">${kind}${kind && num(state.fw) > 0 ? ' The line width is not applied in this table.' : ''}${shown.length ? ` Press a molecule to load it${shown.some((r) => r.k === state.k) ? '; the shaded row is the one on the plot' : ''}.` : ''}</p>`;
     // the molecule that was pressed is loaded in steps, and each one draws this table again: its button keeps the focus
     const back = had.whoK || (whoFocus && (document.activeElement === document.body || !document.activeElement) ? whoFocus : '');
     if (whoFocus && whoFocus === state.k) whoFocus = '';
@@ -559,11 +633,12 @@ function markFields() {
     for (const id of ['xs-min', 'xs-max']) $(id).setAttribute('aria-invalid', numError($(id).value, id) ? 'true' : 'false');
     const rh = num(state.rh); $('xs-rh').setAttribute('aria-invalid', rh == null || rh < 0 || rh > 100 ? 'true' : 'false');
 }
-function renderAll() { markFields(); renderPlot(); renderAt(); renderWho(); renderCalc(); renderConv(); writeURL(); }
+function renderAll() { markFields(); renderPlot(); renderMp(); renderGap(); renderAt(); renderWho(); renderCalc(); renderConv(); writeURL(); }
 async function boot() {
     readURL(); const hash = location.hash;
     if (state.who !== 'all') state.who = 'air';
     if (state.ws !== 'sig') state.ws = '';
+    state.ph = String(nPh()); if (!['air', 'vac'].includes(state.sc)) state.sc = '';
     const k0 = state.k; state.k = '';   // the molecule of the link is shown once its datasets are loaded (choose)
     // the first molecule's own file is asked for now, beside the species list, when its key can be its file name
     const guess = k0 || 'O3';
@@ -573,7 +648,12 @@ async function boot() {
     const bind = (id, k, ev = 'input', fn = renderAll) => { const el = $(id); if (el.type === 'checkbox') el.checked = !!state[k]; else el.value = state[k]; el.addEventListener(ev, () => { state[k] = el.type === 'checkbox' ? el.checked : el.value; fn(); }); };
     if (!X_AXES[state.x]) state.x = 'nm';
     bind('xs-x', 'x', 'change', () => { syncLims(); renderAll(); }); bind('xs-y', 'y', 'change'); bind('xs-log', 'log', 'change'); bind('xs-lines', 'lines', 'change');
-    bind('xs-lam', 'lam'); bind('xs-fw', 'fw');
+    bind('xs-lam', 'lam'); bind('xs-fw', 'fw'); bind('xs-sc', 'sc', 'change');
+    // photons absorbed: three radio buttons in the site's segmented control
+    for (const n of PHOTONS) {
+        const r = $(`xs-ph${n}`); r.checked = String(n) === state.ph;
+        r.addEventListener('change', () => { if (r.checked) { state.ph = String(n); renderAll(); } });
+    }
     bind('xs-rh', 'rh', 'input', () => { markFields(); renderWho(); writeURL(); });   // the humidity of the air view
     // From and To are typed in the unit of the x axis and kept in nm
     for (const id of ['xs-min', 'xs-max']) {

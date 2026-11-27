@@ -154,6 +154,27 @@ test('thinning keeps the ends, the length limit and narrow peaks', () => {
     assert.ok(worst < 0.01, `worst ${worst}`);
 });
 
+test('thinning keeps every stretch of the range that has data', () => {
+    // shaped like the Leiden CO table: 81 points from 10 to 90 nm, 50 000 line-resolved points from 90.8 to 108.7 nm,
+    // and a band at 115 nm on 0.25 nm steps to 166.5 nm. Buckets of equal point count (before) gave the dense stretch
+    // all but a handful of the 2000 points and drew a straight line from 108.7 to 166.5 nm.
+    const d = [];
+    for (let i = 0; i < 81; i++) d.push([10 + i, 1e-17]);
+    for (let i = 0; i < 50000; i++) { const x = 90.8 + i * (17.9 / 49999); d.push([x, 1e-19 + 1e-16 * Math.sin(Math.PI * x / 0.02) ** 8]); }
+    for (let i = 0; i < 232; i++) { const x = 108.75 + 0.25 * i; d.push([x, 1e-21 + 1.5e-17 * Math.exp(-(((x - 115) / 0.4) ** 2) / 2)]); }
+    const r = X.resample(d, 2000);
+    assert.equal(r.length, 2000);
+    const b = X.thinBuckets(d.map((p) => p[0]), 2000);
+    assert.equal(b.length, 1998);
+    assert.ok(b.every(([s, e], i) => s < e && (i === 0 ? s === 1 : s === b[i - 1][1])) && b[b.length - 1][1] === d.length - 1, 'buckets tile the inside points');
+    // the source has a point at least every 1 nm, so the kept points are never 1.5 nm apart; the band maximum is kept
+    let gap = 0;
+    for (let i = 1; i < r.length; i++) gap = Math.max(gap, r[i][0] - r[i - 1][0]);
+    assert.ok(gap < 1.5, `widest gap ${gap} nm`);
+    assert.ok(r.includes(d.find((p) => p[0] === 115)));
+    assert.ok(r.filter((p) => p[0] > 108.72).length >= 230, 'the sparse stretch is kept nearly whole');
+});
+
 test('Beer–Lambert', () => {
     // 1.1329e-17 cm² × 3.262 33e16 cm⁻³ × 10 cm = 3.695 89; e^−3.695 89 = 0.024 825; A = τ/ln 10 = 1.605 11
     const r = X.beerLambert(1.1329e-17, X.density(133.322368, 296), 10);
@@ -598,4 +619,90 @@ test('mole fractions and path lengths as the page writes them', () => {
     assert.equal(X.pathText(482.67, 1), '480 m', 'two figures for a rough value');
     assert.equal(X.pathText(999.6), '1000 m');
     assert.equal(X.pathText(null), '—');
+});
+
+test('several photons: an air wavelength goes to vacuum first, then is divided by n', () => {
+    // Peck and Reeder (1972) at 243 nm: σ² = (1000/243)² = 16.935 µm⁻², n − 1 = (8060.51 + 2480990/115.339 + 17455.7/22.395) × 1e-8 = 3.0350e-4
+    near(X.airIndex(243) - 1, 3.0350e-4, 2e-4);
+    assert.equal(X.airIndex(150), null, 'the formula holds from 185 nm');
+    // CO B ¹Σ⁺ ← X (0,0): ν₀₀ = 86 916.16 cm⁻¹ (Huber and Herzberg), two photons of 2 × 10⁷/86 916.16 = 230.1068 nm in vacuum;
+    // in standard air (n − 1 = 3.0795e-4 there) that is 230.1068 / 1.000 307 95 = 230.0360 nm, the value the site's REMPI Schemes page lists
+    near(X.vacuumToAir(230.1068), 230.0360, 2e-7);
+    near(X.airToVacuum(230.0360), 230.1068, 2e-7, 'and back');
+    const co = X.multiphoton(230.0360, 2, 'air');
+    assert.equal(co.air, true);
+    near(co.vac, 230.1068, 2e-7);
+    near(co.target, 115.0534, 2e-7, 'λ_vac / 2, not λ_air / 2 = 115.0180');
+    near(co.cm1, 86916.16, 2e-6);
+    near(co.eV, 10.77623, 2e-6, '86 916.16 cm⁻¹ × 1.239 842e-4 eV cm');
+    // 230 nm typed: from 200 nm up it is read as an air wavelength by default (230.0708 nm in vacuum, so λ/2 = 115.0354 nm)
+    const d = X.multiphoton(230, 2);
+    assert.equal(d.air, true);
+    near(d.target, 115.0354, 2e-7);
+    // the same number read as a vacuum wavelength is simply halved
+    assert.equal(X.multiphoton(230, 2, 'vac').target, 115);
+    // below 200 nm the default is vacuum; an air wavelength below 185 nm cannot be converted and is read as vacuum, and says so
+    assert.deepEqual([X.multiphoton(193.3, 2).air, X.multiphoton(193.3, 2).target], [false, 96.65]);
+    const low = X.multiphoton(180, 3, 'air');
+    assert.deepEqual([low.air, low.outside, low.target], [false, true, 60]);
+    // three photons: 3 × 10⁷/230.1068 = 130 374.2 cm⁻¹
+    near(X.multiphoton(230.0360, 3, 'air').cm1, 130374.24, 2e-6);
+    // one photon: nothing changes but the scale
+    near(X.multiphoton(248.4, 1).target, X.airToVacuum(248.4), 1e-12);
+    assert.equal(X.multiphoton(248.4, 4), null);
+    assert.equal(X.multiphoton(0, 2), null);
+    // two photons of Lyman-α/2 in vacuum land on the preset line, and its stored values are used
+    assert.equal(X.lineKeyNear(X.multiphoton(243.134, 2, 'vac').target), '121.567');
+    assert.equal(X.lineKeyNear(115.0354), null);
+    assert.deepEqual([X.nmText(115.03541), X.nmText(115), X.nmText(166.55, 1), X.nmText(230.07083, 3)], ['115.04', '115', '166.6', '230.071']);
+});
+
+test('where a molecule has no data: the line says how far its tables reach, and why only where it can say', () => {
+    const co = [{ l: [6.2, 166.55] }, { l: [58.4, 58.4] }, { l: [91.73, 100.38] }];
+    assert.equal(X.coverage(co, 115), null, 'inside a table');
+    assert.equal(X.coverage(co, 58.9), null, 'a single point within 1 nm counts, as the table reads it');
+    assert.deepEqual(X.coverage(co, 230), { nm: 230, below: 166.55, above: null });
+    assert.deepEqual(X.coverage([{ l: [150, 180] }, { l: [200, 300] }], 190), { nm: 190, below: 180, above: 200 });
+    assert.deepEqual(X.coverage([{ l: [200, 300] }], 121.567), { nm: 121.567, below: null, above: 200 });
+    assert.equal(X.coverage([], 230), null, 'no datasets: nothing to say');
+    // CO beyond its tables: the sourced note, and the pointer to several photons (one photon only)
+    const t = X.noDataText('CO', 'CO', 230, X.coverage(co, 230), 1, '230');
+    assert.match(t, /^No dataset for CO reaches 230 nm; its tables end at 166\.6 nm\. /);
+    assert.match(t, /A ¹Π ← X \(the fourth positive system\), starts at 154\.4 nm/);
+    assert.match(t, /only in weak forbidden bands: the I ¹Σ⁻ ← X band at 154\.9 nm and the spin-forbidden bands to its triplet states/);
+    assert.match(t, /the Cameron bands, a ³Π ← X, whose \(0,0\) band is at 206\.3 nm\)\. None of the five collections tabulates them past 166\.6 nm\./);
+    assert.match(t, /For a multiphoton scheme, set Photons absorbed to 2 or 3\.$/);
+    assert.doesNotMatch(t, /not the same as no absorption/, 'the CO note says what is there instead');
+    assert.doesNotMatch(X.noDataText('CO', 'CO', 230, X.coverage(co, 230), 2, '230'), /set Photons absorbed/);
+    // any other molecule: no physics, only what the data show
+    const n2 = X.noDataText('N<sub>2</sub>', 'N2', 230, { nm: 230, below: 200.4, above: null }, 1, '230');
+    assert.equal(n2, 'No dataset for N<sub>2</sub> reaches 230 nm; its tables end at 200.4 nm. Outside their range the five collections hold no value for it, which is not the same as no absorption. For a multiphoton scheme, set Photons absorbed to 2 or 3.');
+    assert.equal(X.noDataText('Xx', 'Xx', 100, { nm: 100, below: null, above: 150 }, 1, '100'),
+        'No dataset for Xx reaches 100 nm; its tables start at 150 nm. Outside their range the five collections hold no value for it, which is not the same as no absorption.', 'shorter than every table: more photons do not help');
+    assert.equal(X.noDataText('Xx', 'Xx', 190, { nm: 190, below: 180, above: 200 }, 1, '190'),
+        'No dataset for Xx covers 190 nm; its tables stop at 180 nm and start again at 200 nm. Outside their range the five collections hold no value for it, which is not the same as no absorption.');
+    // the CO note is for wavelengths past its tables only
+    assert.doesNotMatch(X.noDataText('CO', 'CO', 3, { nm: 3, below: 2.45, above: 6.2 }, 1, '3'), /Cameron/);
+    assert.equal(X.noDataText('CO', 'CO', 115, null), '');
+});
+
+test('coverage() counts a dataset as reaching a wavelength exactly where tableValue() gives it a value', () => {
+    // three kinds of dataset that tableValue() reads point by point (nearest point within 1 nm), and a spectrum it interpolates
+    const kinds = [
+        { what: 'two points', meta: { id: 'test:two', l: [100, 110], np: 2 }, data: [[100, 1e-18], [110, 2e-18]] },
+        { what: 'one point', meta: { id: 'test:one', l: [105, 105], np: 1 }, data: [[105, 1e-18]] },
+        { what: 'a list of band maxima', meta: { id: 'MPI-Mainz:Xx_Doe(1990)_298K_100-110nm(max)', l: [100, 110], np: 5 }, data: [[100, 1e-18], [102, 2e-18], [105, 3e-18], [108, 2e-18], [110, 1e-18]] },
+        { what: 'a spectrum', meta: { id: 'test:spectrum', l: [100, 110], np: 11 }, data: Array.from({ length: 11 }, (_, i) => [100 + i, 1e-18]) },
+    ];
+    assert.equal(X.isPeakList(kinds[2].meta), true, 'the (max) file is a list of band maxima');
+    // at the ends of the tables, where the allowance matters (between two far-apart points coverage() counts the range as reached)
+    for (const { what, meta, data } of kinds) {
+        for (const nm of [98.9, 99.1, 99.9, 100.5, 110.4, 110.9, 111.1, 112]) {
+            const has = X.tableValue(meta, data, nm, 0).sigma != null;
+            assert.equal(X.coverage([meta], nm) === null, has, `${what} at ${nm} nm: the table ${has ? 'gives' : 'has no'} value`);
+        }
+    }
+    // the 1 nm allowance itself: a two-point set at 110.9 nm counts, a spectrum does not
+    assert.equal(X.coverage([kinds[0].meta], 110.9), null);
+    assert.deepEqual(X.coverage([kinds[3].meta], 110.9), { nm: 110.9, below: 110, above: null });
 });

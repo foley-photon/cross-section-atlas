@@ -297,6 +297,83 @@ test('a species file that is missing or is another molecule sends the page to in
     assert.match(wrong.summary, /^O3: 1 dataset/);
 });
 
+test('a wavelength no dataset of the molecule reaches: the spectrum panel and Who absorbs here? say so', () => {
+    // Xx's tables run from 121.567 to 300 nm
+    const r = bootPage(SITE, FIX, 'k=Xx&lam=400');
+    assert.equal(r.ok, true, r.problems.join('; '));
+    const want = 'No dataset for Xx reaches 400 nm; its tables end at 300 nm. Outside their range the five collections hold no value for it, which is not the same as no absorption. For a multiphoton scheme, set Photons absorbed to 2 or 3.';
+    assert.equal(text(r.first['xs-gap']), want);
+    assert.ok(text(r.first['xs-who']).includes(want));
+    assert.equal(r.first['xs-mp'], '', 'one photon: no box for several');
+    // inside the tables: nothing to say
+    const inside = bootPage(SITE, FIX, 'k=Xx&lam=250');
+    assert.equal(inside.first['xs-gap'], '');
+    assert.doesNotMatch(inside.first['xs-who'], /No dataset for/);
+    // an empty plot range: where the molecule's tables lie, or that other datasets of it have data there
+    const none = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_vuv_steps&min=400&max=500');
+    assert.equal(none.first['xs-plot-note'], 'No dataset of Xx has data in this range; its tables end at 300 nm. Outside its tables the five collections hold no value for Xx, which is not the same as no absorption.');
+    const between = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_vuv_steps&min=130&max=140');
+    assert.match(between.first['xs-plot-note'], /^No dataset of Xx has data in this range; its tables stop at 121\.6 nm and start again at 150 nm\. /);
+    // a shown dataset spans the range (the steps run from 150 to 180 nm, one point every 10 nm) but has no point inside it:
+    // the line says so, and does not send the reader to the edges of the tables
+    const inGap = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_vuv_steps&min=162&max=168');
+    assert.equal(inGap.first['xs-plot-note'], 'The shown datasets have no tabulated point in this range (or none above zero, on the log axis).');
+    const inGapLin = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_vuv_steps&min=162&max=168&log=0');
+    assert.equal(inGapLin.first['xs-plot-note'], 'The shown datasets have no tabulated point in this range.');
+    const others = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_vuv_steps&min=220&max=280');
+    assert.match(others.first['xs-plot-note'], /^No data in this range in the shown datasets; 2 other datasets of Xx have data here: tick them in the list\./);
+});
+
+test('two photons: λ_air → λ_vac, then λ/2 in the box, the laser-line table and Who absorbs here?', () => {
+    // 400 nm in air is 400.1131 nm in vacuum (Peck and Reeder), so λ/2 = 200.0565 nm, and 2 × 10⁷/400.1131 = 49 985.9 cm⁻¹
+    const r = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_band_298K&lam=400&ph=2');
+    assert.equal(r.ok, true, r.problems.join('; '));
+    assert.match(text(r.first['xs-mp']), /^2 photons of 400 nm carry 49986 cm⁻¹ \(6\.197 eV\), the energy of one 200\.06 nm photon\. 400 nm in air is 400\.113 nm in vacuum, so λ\/2 = 200\.057 nm \(vacuum\)\./);
+    assert.match(text(r.first['xs-mp']), /it is a locator, not a 2-photon cross section/);
+    assert.match(r.first['xs-mp'], /href="\/tools\/rempi-schemes\/"/);
+    // the laser-line table gains σ at λ/2 (the band dataset covers 200.06 nm; 400 nm is outside it)
+    assert.match(text(r.first['xs-at']), /σ at 200\.06 nm, cm² /);
+    assert.match(text(r.first['xs-at']), /Foley \(2026\) 298 K — [\d.]+ × 10 E−\d+ thinned outside the data/);
+    // Who absorbs here? ranks at λ/2, says what that is, and drops the air columns and the humidity
+    assert.match(text(r.first['xs-who']), /Ranked by the one-photon σ at 200\.06 nm, the energy of 2 photons of 400 nm\./);
+    assert.doesNotMatch(r.first['xs-who'], /class="num xs-w-a"|xs-air-fold/);
+    assert.equal(r.first['xs-gap'], '', 'λ/2 is inside the tables');
+    assert.equal(r.first['xs-who-badge'], '2 × hν at 400 nm → 200.06 nm');
+    // the plot marks λ/2 on the vacuum scale, and its note says what the one-photon spectrum there is
+    assert.ok(r.first.marks.includes('2 photons of 400 nm ≙ 200.06 nm (vac)'), JSON.stringify(r.first.marks));
+    assert.match(r.first['xs-plot-note'], /The line labeled “2 photons of” marks 200\.06 nm \(vacuum\), the energy of 2 photons of 400 nm; the one-photon spectrum there shows the excited states at that energy, where a 2-photon resonance may occur \(2-photon selection rules differ\)\./);
+    assert.match(text(r.first['xs-at']), /it locates one-photon-allowed excited states at the energy of 2 photons and is not a 2-photon cross section/);
+    // the box and the laser-line table agree on the scale: the table's photon energy is that of the vacuum wavelength
+    const agree = (b, scale) => {
+        const box = text(b.first['xs-mp']); const at = text(b.first['xs-at']);
+        const total = +box.match(/carry (\d+) cm⁻¹/)[1];
+        const m = scale === 'air' ? at.match(/400 nm in air \(([\d.]+) nm in vacuum\) = ([\d.]+) cm⁻¹ = ([\d.]+) eV per photon\./) : at.match(/400 nm = ([\d.]+) cm⁻¹ = ([\d.]+) eV\./);
+        assert.ok(m, at);
+        const per = +(scale === 'air' ? m[2] : m[1]);
+        assert.ok(Math.abs(2 * per - total) <= 1, `2 × ${per} cm⁻¹ against ${total} cm⁻¹ in the box`);
+        if (scale === 'air') assert.ok(box.includes(`400 nm in air is ${m[1]} nm in vacuum`), 'the same vacuum wavelength in both');
+    };
+    agree(r, 'air');
+    assert.match(text(r.first['xs-at']), /400 nm in air \(400\.113 nm in vacuum\) = 24992\.9 cm⁻¹ = 3\.0987 eV per photon\./);
+    // read as a vacuum wavelength the line is simply halved
+    const vac = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_band_298K&lam=400&ph=2&sc=vac');
+    assert.match(text(vac.first['xs-mp']), /400 nm is read as a vacuum wavelength, so λ\/2 = 200 nm/);
+    agree(vac, 'vac');
+    // on the photon-energy axis the mark gives the energy of both photons
+    const ev = bootPage(SITE, FIX, 'k=Xx&on=test:Xx_band_298K&lam=400&ph=2&x=eV');
+    assert.ok(ev.first.marks.some((l) => /^2 × hν = 6\.19\d* eV$/.test(l)), JSON.stringify(ev.first.marks));
+    // past the fit of the air formula an air wavelength is read as vacuum, and the box says why; above 2000 nm vacuum is the default
+    const far = bootPage(SITE, FIX, 'k=Xx&lam=1800&ph=2');
+    assert.match(text(far.first['xs-mp']), /1800 nm is read as a vacuum wavelength \(the air formula holds from 185 to 1700 nm\), so λ\/2 = 900 nm/);
+    const ir = bootPage(SITE, FIX, 'k=Xx&lam=2100&ph=2');
+    assert.match(text(ir.first['xs-mp']), /2100 nm is read as a vacuum wavelength, so λ\/2 = 1050 nm/);
+    assert.doesNotMatch(text(ir.first['xs-mp']), /air formula/);
+    // three photons: λ/3 = 133.37 nm lies between Xx's Lyman-α point and its 150–180 nm steps: the line says where they stop and start
+    const three = bootPage(SITE, FIX, 'k=Xx&lam=400&ph=3');
+    assert.match(text(three.first['xs-gap']), /^No dataset for Xx covers 133\.37 nm; its tables stop at 121\.6 nm and start again at 150 nm\./);
+    assert.doesNotMatch(three.first['xs-gap'], /set Photons absorbed/);
+});
+
 test('with neither the species list nor index.json the page says so', () => {
     const r = bootData((d) => { noSplit(d); fs.rmSync(path.join(d, 'index.json')); });
     assert.equal(r.ok, false);

@@ -44,6 +44,13 @@ formats and units. The atlas puts them side by side, credits each dataset, and d
   line differ by a factor of two or more) is flagged. O₂ above 245 nm, where its datasets disagree, is listed and left
   out of the sum. One field sets the relative humidity (50 % to start). A fold lists every mole fraction with its
   source.
+- **Several photons.** Photons absorbed (1, 2 or 3) under the laser-line field: an air wavelength is converted to
+  vacuum (standard air of Peck and Reeder, 1972, whose formula holds from 185 to 1700 nm; by default 200 to 2000 nm is
+  read as air and the rest as vacuum, and a field changes that), then divided by n. The plot marks λ/n, the laser-line
+  table adds each dataset's one-photon σ there, and "Who absorbs here?" ranks the molecules at λ/n without the air
+  columns. The one-photon σ at λ/n locates excited states at the energy of n photons; it is not an n-photon cross
+  section, and the page says so. Where no dataset of the shown molecule reaches the wavelength (λ or λ/n), the
+  spectrum panel and "Who absorbs here?" say how far its tables reach (for CO past its tables, which bands lie there).
 - **Absorption and photolysis.** From σ, a pressure, a temperature and a path: number density, optical depth,
   absorbance and transmitted fraction. From a pulse fluence and a quantum yield: photons per cm², fraction excited,
   fraction photolyzed and the saturation fluence.
@@ -175,9 +182,16 @@ python scripts/build_data.py <archive>/clean <site>/beta/cross-sections/data
 ```
 
 and commit them to the site's repository. Each spectrum with more than 2000 points is thinned to 2000 that keep its
-shape on a log σ scale: in each bucket of points the one that spans the largest triangle with its neighbors, so peaks
-and band heads survive (`resample()` in `site/js/xsec.js` and in the build script; a test checks that they agree
-point for point). Narrow windows between bands can still fall between the kept points, so for each thinned spectrum
+shape on a log σ scale: in each bucket of points the one that spans the largest triangle with its neighbors, so peaks,
+band heads and the valleys between them survive (`resample()` in `site/js/xsec.js` and in the build script; a test
+checks that they agree point for point). A table of more than 50 000 points (the line-resolved Leiden tables, the
+Fourier-transform spectra of O₃ and NO₂) keeps 2000 × √(n / 50 000) points, at most 5000. The buckets follow a grid of
+cells of equal width in log λ (one cell per 4 kept points): every cell where the source has data keeps some of its
+points, half of the buckets are shared out evenly among the cells and half in proportion to their points. So a dense,
+line-resolved stretch cannot take the whole budget: two kept points are never further apart than the widest gap of
+the source between them plus two cells (for Leiden CO a cell is 0.44 nm wide at 166 nm). Before, buckets held equal numbers of
+points, and the 2000 points of Leiden CO all fell between 90.8 and 108.7 nm, where 99.9 % of its 840 722 points
+lie. Narrow windows between bands can still fall between the kept points, so for each thinned spectrum
 the index also stores σ of the full spectrum at every preset laser line (`at`), and the table uses it there. The full
 spectra stay in the archive. The spectrum files are numbered in build order, so a rebuild that leaves a dataset out
 renumbers the files after it; the page finds each file through the species' entry.
@@ -213,7 +227,9 @@ in `scripts/` use only the standard library.
 4. `build_index.py CLEAN STATS` writes `clean/index.json`; `spotcheck.py CLEAN OUT` compares the datasets at
    reference wavelengths; `sha256sums.py DIR OUT` writes the checksums.
 5. `scripts/build_data.py CLEAN OUT [--built YYYY-MM-DD]` writes the page's data files (all six kinds above), and
-   `scripts/thinning_check.py CLEAN OUT` reports how far the thinned spectra are from the full ones at the laser lines.
+   `scripts/thinning_check.py CLEAN OUT` reports how far the thinned spectra are from the full ones at the laser lines
+   (with `--gaps [--before OLD_OUT]`, how they cover their range: the widest gaps the thinning made, for every
+   dataset, and which got wider or narrower than in an earlier build).
 
 Each step reads what the one before it wrote. `survey_mainz.py` and `tuvx_inventory.py` were used once to look at the
 file layouts before the conversion.
@@ -232,8 +248,10 @@ node --test "tests/*.test.mjs"
   values, number formatting), the preset laser lines, the reference labels and the rows of "Who absorbs here?" (at a
   line, from the coarse bins, the air view), the air of the air view (number density, water vapor from the humidity,
   the mole fractions against their sources), α and the 1/e length, what makes a sum rough (upper limits, flagged
-  rows, 2 nm means, a value in a structured spectrum) and what stays out of it (O₂ above 245 nm), with the expected
-  values worked out by hand in the comments.
+  rows, 2 nm means, a value in a structured spectrum) and what stays out of it (O₂ above 245 nm), air and vacuum
+  wavelengths and n photons (CO B ← X: 230.036 nm in air is 230.107 nm in vacuum, λ/2 = 115.053 nm), and where a
+  molecule's tables reach (coverage() and tableValue() agree at the ends of a table), with the expected values worked
+  out by hand in the comments.
 - `tests/modules.test.mjs`: the page loads. Every module parses, every imported name is exported, `index.html` loads
   `app.js`, the stylesheet and files that exist, every element id `app.js` looks up is in `index.html`, and `app.js`
   reads the data layout the build writes; broken copies of the page check that this check catches them.
@@ -242,7 +260,10 @@ node --test "tests/*.test.mjs"
   upper limits and citation texts, the absorption and photolysis results, the "Who absorbs here?" table in its air
   and all-molecules views, between the lines, and a molecule loaded from it; the air view's line, columns and fold at
   three humidities, in the order of σ, between the lines and with a humidity that is not a number; the line with an
-  unconfirmed oxygen value and with a value in a band, on a copy of the fixture with O₂ and H₂O added) and breaks copies of the page in ways the
+  unconfirmed oxygen value and with a value in a band, on a copy of the fixture with O₂ and H₂O added; with 2 and 3
+  photons the box under the laser-line field, the mark on the plot, the extra column, the badge and ranking of "Who
+  absorbs here?", and that the box and the table give the same vacuum wavelength and photon energy; the line for a
+  wavelength no dataset reaches and for an empty plot range) and breaks copies of the page in ways the
   static check cannot see. It also boots the page on a copy of the data without the split files, with a species file
   missing and with one that holds another molecule: the page must read `index.json` and show the same.
 - `tests/selftest.test.mjs`: the engine cases of `scripts/selftest.mjs`, the data checks on `tests/fixtures/data`
@@ -266,6 +287,11 @@ species files (two keys that differ only by case among them), the "Who absorbs h
 pair of datasets for each step of the rule, `index.json` with the fields and field order it had before the split, a
 rebuild that gives the same bytes, the output passing the site's data checks (which make the split files again in
 JavaScript), and the thinning and the reference labels compared with the page's (the last ones need Node).
+`tests/test_thinning.py` checks that a thinned spectrum covers its range: on a synthetic spectrum shaped like the
+Leiden CO table (a dense line-resolved stretch between two sparse ones), no two kept points are further apart than
+the source's own gap plus two cells, the band maxima of the sparse stretches are kept, and the dense stretch keeps
+its peaks and valleys in every 0.5 nm. With `XSEC_CLEAN` set to the archive's `clean/` folder it runs the same checks
+on the real Leiden CO table (skipped otherwise).
 `tests/test_release.py` checks the version bookkeeping.
 
 The check the site runs can also be run alone: `node scripts/selftest.mjs` on this repository's `site/`, or
@@ -296,7 +322,8 @@ scripts/
   selftest.mjs       the check the site runs on its copy: engine cases, page check, data checks (the split files
                      are made again from index.json and compared), boot check
   build_data.py      the page's data files from the cleaned archive
-  thinning_check.py  how far the thinned spectra are from the full ones at the laser lines
+  thinning_check.py  how far the thinned spectra are from the full ones at the laser lines, and how they cover
+                     their range (--gaps)
   archive/           the scripts that made the cleaned archive from the downloads
   release.py         version bookkeeping for a release
   finish-release.sh  tags the version on origin/main and makes its GitHub release
@@ -307,27 +334,40 @@ tests/               Node and Python tests, and their fixtures
 
 ## Validation
 
-- The site's data files are the output of `scripts/build_data.py --built 2026-11-11` on the 2026-11-07 archive,
-  byte for byte (the 2026-11-07 build, before the exclusions above, was reproduced byte for byte by the earlier
-  version of the script). Version 1.1.0 of the script writes `index.json` and the 5860 spectrum files with the same
-  bytes as before, and adds `species.json`, the 1004 species files, `who.json` and `coarse.json`.
+- The site's data files are the output of `scripts/build_data.py --built 2026-11-27` on the 2026-11-07 archive,
+  byte for byte. Version 1.1.0 of the script reproduces the build before that one (`--built 2026-11-11`) byte for
+  byte; the 2026-11-27 build differs from it only in the 637 thinned spectra and what follows from them (below). Data
+  folder 49.9 MB, 45.5 MB before (spectra 43.6 MB, 39.2 MB before; 2 168 368 points shipped, 1 959 066 before).
 - "Who absorbs here?": the build makes its tables in Python from the archive, and the site's check makes them again in
   JavaScript from `index.json` and the spectra on the site. On the site's data the two agree on every one of the 4514
-  rows at the 13 preset lines (dataset, value to 1 part in 10⁹, point or gap, label) and on every one of the 2362 runs
-  of the coarse table. Of the 4514 rows, 661 are marked as interpolated across a gap of more than 5 nm, 55 as a
+  rows at the 13 preset lines (dataset, value to 1 part in 10⁹, point or gap, label) and on every one of the 2351 runs
+  of the coarse table. Of the 4514 rows, 655 are marked as interpolated across a gap of more than 5 nm, 55 as a
   single listed point, 52 as electron energy loss and 12 as upper limits; no row needs an isotopologue file. At 248.4 nm the row for ozone is the first row of the laser-line table, 1.079 × 10⁻¹⁷ cm² (Sander et al.
   2011).
 - Ozone at the 253.65 nm mercury line: the median of the 41 room-temperature (290 to 300 K) ozone datasets on the
-  site is 1.1410 × 10⁻¹⁷ cm², 0.71 % above the consensus value 1.1329(35) × 10⁻¹⁷ cm² of Hodges et al. (2019). The
+  site is 1.1398 × 10⁻¹⁷ cm², 0.61 % above the consensus value 1.1329(35) × 10⁻¹⁷ cm² of Hodges et al. (2019). The
   site's check requires the median to be within 2 %. Individual datasets range from 6 % below (Vigroux, listed on the
   page as 1953) to 18 % above (Davenport 1982), which is why the check uses the median.
-- Thinning: 637 of the 5860 datasets have more than 2000 points in the source. Over the 2237 pairs of a thinned
-  dataset and a laser line (or the 253.65 nm mercury line) in its range, σ from the thinned spectrum differs from the
-  full spectrum by 0.19 % at the median, but by more than 10 % in 12 % of the pairs, and by orders of magnitude in a
-  few banded spectra (Leiden S₂ at 405 nm, 5.6 × 10⁴ times; Leiden CO at 118.2 nm, 1.4 × 10⁴ times; Leiden O₂ at
-  Lyman-α, 490 times). That is the error of the plotted curve (`scripts/thinning_check.py`). At the preset lines the
-  table gives the stored full-resolution value instead (Leiden O₂ at Lyman-α: 1.147 × 10⁻²⁰ cm²); anywhere else it
-  says when a value comes from a thinned spectrum.
+- Thinning: 637 of the 5860 datasets have more than 2000 points in the source; 127 have more than 50 000 and keep
+  more than 2000 (up to 5000). Over the 2237 pairs of a thinned dataset and a laser line (or the 253.65 nm mercury
+  line) in its range, σ from the thinned spectrum differs from the full spectrum by 0.12 % at the median, by more
+  than 10 % in 8.8 % of the pairs, and by orders of magnitude in the deepest valleys of the Leiden S₂ spectrum (at
+  405 nm, 4.9 × 10⁴ times, where the full spectrum gives 2.9 × 10⁻⁴⁰ cm²). The build before thinning by cells
+  (2026-11-11) gave 0.19 %, 12 % and Leiden CO at 118.2 nm 1.4 × 10⁴ times, Leiden O₂ at Lyman-α 490 times; those
+  are now within 0.1 % and 17 %. That is the error of the plotted curve (`scripts/thinning_check.py`). At the preset
+  lines the table gives the stored full-resolution value instead (Leiden O₂ at Lyman-α: 1.147 × 10⁻²⁰ cm²); anywhere
+  else it says when a value comes from a thinned spectrum.
+- Coverage of the thinned spectra (`scripts/thinning_check.py CLEAN DATA --gaps`): no thinned dataset has two
+  neighboring points further apart than the widest gap of its source between them plus two cells of the thinning's
+  grid; the largest excess is 2.4 nm, in the 4103-point Bogumil O₃ spectrum near 1057 nm. In the 2026-11-11 build
+  48 datasets broke that bound, the Leiden tables worst: CO kept no point from 6.2 to 90.8 nm or from 108.7 to
+  166.5 nm (its B ← X band at 115 nm and its A ← X bands were drawn as straight lines), C none from 0.9 to 110 nm, H
+  none from 7.7 to 91 nm. The widest gap shrank by more than 5 nm or 20 % in 147 datasets and grew by that much in
+  156, all of these by under 1 nm (the most, 1.4 to 2.2 nm, in the 3701-point Bogumil NO₂ spectrum near 920 nm).
+  "Who absorbs here?" keeps every value; 22 of its 4514 rows change: in 2 the dataset picked changes, because a gap that
+  was the thinning's and not the source's is no longer marked (Leiden CO now stands for CO at Lyman-α, 1.328 × 10⁻¹⁹ cm²,
+  and Leiden NO for NO at 222 nm), and in 20 only a mark changes (a gap no longer marked, or the spread of σ near the
+  line measured on more points).
 - The air view at 248.4 nm and 50 % relative humidity, on the site's data: O₃ 39.5 ppb, α = 0.00105 m⁻¹, 948 m;
   five gases together 0.00106 m⁻¹, a 1/e length of 947 m (the page's worked example, by hand). O₂ is listed and left
   out of that sum: the series the rule picks above 245 nm gives 1.98 × 10⁻²⁴ cm² at 248.4 nm (α ≈ 0.001 m⁻¹, as much

@@ -668,14 +668,18 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
             const h = $('xs-who') ? $('xs-who').innerHTML : '';
             if (!(split ? h.includes('data-who-view') || h.includes('Enter a wavelength') : h.includes('no table for the reverse lookup'))) problems.push(`#xs-who does not show ${split ? 'the reverse lookup' : 'that the data have no table'} ${what}`);
         };
-        const snap = () => Object.fromEntries(['xs-sets', 'xs-at', 'xs-who', 'xs-plot-note', 'xs-bl', 'xs-pp'].map((id) => [id, $(id) ? $(id).innerHTML || $(id).textContent : null]));
+        // the panels' HTML, and the labels of the lines marked on the last chart drawn (marks)
+        const snap = () => ({
+            ...Object.fromEntries(['xs-sets', 'xs-at', 'xs-who', 'xs-who-badge', 'xs-plot-note', 'xs-bl', 'xs-pp', 'xs-gap', 'xs-mp'].map((id) => [id, $(id) ? $(id).innerHTML || $(id).textContent : null])),
+            marks: ((draws[draws.length - 1] || {}).vlines || []).map((v) => v.label),
+        });
         let first = {};
         if (g.__xsec) {
             first = snap();
             panels(false); whoShows('after the boot');
             // the air view weights its rows by abundance: with a row, it says what takes the light in air and gives α
             const w0 = first['xs-who'] || '';
-            if (split && g.__xsec.state.who !== 'all' && /data-who-k=/.test(w0) && !(/class="xs-who-take"/.test(w0) && /class="num xs-w-a"/.test(w0))) problems.push('the air view of the reverse lookup has rows and no answer for air (the line above the table, the α column)');
+            if (split && (g.__xsec.state.ph || '1') === '1' && g.__xsec.state.who !== 'all' && /data-who-k=/.test(w0) && !(/class="xs-who-take"/.test(w0) && /class="num xs-w-a"/.test(w0))) problems.push('the air view of the reverse lookup has rows and no answer for air (the line above the table, the α column)');
             if (/NaN|undefined/.test(w0)) problems.push('the reverse lookup shows NaN or undefined after the boot');
             // the steps a reader takes: use a σ, a laser line, the eV axis, a line width
             await fire('document', 'click', { target: { closest: (s) => (s === 'button[data-use]' ? { dataset: { use: '1e-17' } } : null) } });
@@ -687,7 +691,7 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
             const last = draws[draws.length - 1];
             if (last && last.x && !/eV/.test(last.x.label)) problems.push(`the x axis is ${JSON.stringify(last.x.label)} after picking eV`);
             const xs = last && last.series ? last.series.flatMap((s) => s.x) : [];
-            if (xs.some((x) => !(x > 0 && x < 50))) problems.push('after picking eV the curves are not drawn against photon energies (0 to 50 eV)');
+            if (xs.some((x) => !(x > 0 && x < 1240))) problems.push('after picking eV the curves are not drawn against photon energies (0 to 1240 eV, i.e. above 1 nm)');
         }
         const st = g.__xsec ? g.__xsec.state : {};
         const summary = g.__xsec ? `${st.k}: ${st.on.length} dataset(s) shown, ${draws.length} draw(s)` : '';
@@ -700,6 +704,8 @@ async function bootChild(modDir, dataDir, htmlPath, query) {
             const click = (sel, dataset) => fire('document', 'click', { target: { closest: (s) => (s === sel ? { dataset } : null) } });
             let table = {}; try { table = JSON.parse(fs.readFileSync(path.join(dataDir, 'who.json'), 'utf8')).at || {}; } catch { table = {}; }
             const rowsAt = (nm) => (Array.isArray(table[nm]) ? table[nm].length : 0);
+            // the check below is of the one-photon lookup at a preset line: a link set to several photons is set back to one
+            if (st.ph && st.ph !== '1' && $('xs-ph1')) { $('xs-ph1').checked = true; await fire('xs-ph1', 'change', {}); await settle(10); }
             if (!rowsAt(String(st.lam))) {
                 const best = Object.keys(table).sort((a, b) => rowsAt(b) - rowsAt(a) || a - b)[0];
                 if (best && rowsAt(best)) { await fire('xs-laser', 'click', { target: { closest: () => ({ dataset: { nm: best } }) } }); await settle(10); }

@@ -6,8 +6,10 @@ data/index.json) from a cleaned cross-section archive.
 CLEAN_DIR is the clean/ folder the archive scripts in scripts/archive/ write (clean/index.json and one JSON file per
 dataset); OUT_DIR is the page's data/ folder (on the site, beta/cross-sections/data). Writes OUT_DIR/index.json
 (species and dataset metadata, no spectra) and OUT_DIR/s/<n>.json (one spectrum each, which the page loads when it is
-shown). Each spectrum is thinned to at most MAX_POINTS points, keeping its shape on a log σ scale (largest-triangle
-buckets), so peaks and band heads survive; shorter spectra are kept whole. For a thinned spectrum the index also holds
+shown). Each spectrum is thinned to at most MAX_POINTS points (more for the largest tables, max_points()), keeping its
+shape on a log σ scale (largest-triangle buckets), so peaks and band heads survive, and keeping points in every stretch
+of its range where it has data (the buckets never straddle cells of equal width in log λ, and every cell with data gets
+some); shorter spectra are kept whole. For a thinned spectrum the index also holds
 σ of the full spectrum at each laser line of the page (LASER_NM), because narrow windows between bands can fall between
 the kept points. Non-positive and non-finite σ are dropped.
 
@@ -42,6 +44,14 @@ library only.
 import argparse, bisect, datetime, json, math, os, re, sys, unicodedata
 
 MAX_POINTS = 2000
+# A spectrum of more than BIG_FROM points (a line-resolved table, such as the Leiden CO and O₂ files or the Bremen O₃
+# FTS spectra) keeps MAX_POINTS × √(n / BIG_FROM) points, at most BIG_POINTS: 2000 points cannot show the band
+# structure of a million-point table. meta.max_points is BIG_POINTS.
+BIG_FROM = 50000
+BIG_POINTS = 5000
+# Thinning to mx points cuts the range into mx // THIN_PER_CELL cells of equal width in log λ, and every cell with
+# data keeps some of its points (thin_buckets).
+THIN_PER_CELL = 4
 
 # the page's laser lines (LASER_LINES in site/js/xsec.js; a test checks that the two lists agree)
 LASER_NM = [118.2, 121.567, 157.6, 193.3, 212.8, 222, 248.4, 266, 308, 351.1, 354.7, 405, 532.1]
@@ -105,19 +115,78 @@ def key_of(formula):
     return re.sub(r'[^A-Za-z0-9+\-]+', '_', k).strip('_') or 'x'
 
 
+def max_points(n):
+    """How many points a spectrum of n points keeps: all of them up to MAX_POINTS, then MAX_POINTS, and for a table of
+    more than BIG_FROM points MAX_POINTS × √(n / BIG_FROM), at most BIG_POINTS."""
+    if n <= BIG_FROM:
+        return MAX_POINTS
+    return min(BIG_POINTS, int(MAX_POINTS * math.sqrt(n / BIG_FROM)))
+
+
+def thin_buckets(xs, mx):
+    """The mx - 2 buckets [(start, end), ...] (index ranges, end excluded) between the first and the last of the sorted
+    wavelengths xs, for thinning to mx points. The range is cut into mx // THIN_PER_CELL cells of equal width in log λ
+    (in λ where λ ≤ 0 occurs), and no bucket straddles two cells. Half of the buckets go out evenly: every cell with
+    points gets the same number, or one per point where it has fewer (the largest number for which that fits); the
+    other half are shared out in proportion to the points the cells have beyond those. So a dense, line-resolved
+    stretch cannot take the whole budget and leave a sparse one empty: every cell with data keeps at least one point,
+    a sparse stretch keeps all its points where they fit, and two kept points are never further apart than the widest
+    gap of the data between them plus two cell widths. The same as thinBuckets() in site/js/xsec.js."""
+    n = len(xs); m = mx - 2
+    ncell = max(1, mx // THIN_PER_CELL)
+    lo, hi = xs[0], xs[-1]
+    if lo > 0:
+        f = math.log; a = math.log(lo); span = math.log(hi) - a
+    else:
+        f = float; a = lo; span = hi - lo
+    cells = []; start = 1; cur = -1
+    for i in range(1, n - 1):
+        c = min(ncell - 1, max(0, int((f(xs[i]) - a) / span * ncell))) if span > 0 else 0
+        if c != cur:
+            if i > start:
+                cells.append([start, i])
+            start = i; cur = c
+    if n - 1 > start:
+        cells.append([start, n - 1])
+    cnt = [e - s for s, e in cells]
+    # first half of the buckets: the same number for every cell (all its points where it has fewer), the largest number
+    # that fits; then the rest in proportion to the points each cell has left
+    lo_, hi_ = 1, max(cnt)
+    while lo_ < hi_:
+        mid = (lo_ + hi_ + 1) // 2
+        if sum(min(c, mid) for c in cnt) <= m // 2:
+            lo_ = mid
+        else:
+            hi_ = mid - 1
+    take = [min(c, lo_) for c in cnt]
+    left = m - sum(take); rest = sum(cnt) - sum(take)
+    more = [left * (c - t) // rest if rest > 0 else 0 for c, t in zip(cnt, take)]
+    take = [t + x for t, x in zip(take, more)]
+    left -= sum(more)
+    for k in range(len(cells)):                       # what rounding left over: one more for each cell in turn
+        if left <= 0:
+            break
+        if take[k] < cnt[k]:
+            take[k] += 1; left -= 1
+    out = []
+    for (s, e), t in zip(cells, take):
+        c = e - s
+        out.extend((s + j * c // t, s + (j + 1) * c // t) for j in range(t))
+    return out
+
+
 def resample(d, mx=MAX_POINTS):
-    """At most mx points of d ([[λ, σ], ...] sorted by λ): the first and last, and in each bucket between them the point
-    that spans the largest triangle (λ, log10 σ) with the point kept before it and the mean of the next bucket.
-    The same algorithm as resample() in site/js/xsec.js."""
+    """At most mx points of d ([[λ, σ], ...] sorted by λ): the first and last, and in each bucket between them
+    (thin_buckets) the point that spans the largest triangle (λ, log10 σ) with the point kept before it and the mean of
+    the next bucket. The same algorithm as resample() in site/js/xsec.js."""
     if len(d) <= mx:
         return d
     ly = [math.log10(max(p[1], 1e-40)) for p in d]
     out = [d[0]]; a = 0; n = len(d)
-    bucket = (n - 2) / (mx - 2)
-    for i in range(mx - 2):
-        s = int(i * bucket) + 1; e = min(int((i + 1) * bucket) + 1, n - 1)
-        ns = min(int((i + 1) * bucket) + 1, n - 1); ne = min(int((i + 2) * bucket) + 1, n)
-        cnt = max(1, ne - ns)
+    buckets = thin_buckets([p[0] for p in d], mx)
+    for i, (s, e) in enumerate(buckets):
+        ns, ne = buckets[i + 1] if i + 1 < len(buckets) else (n - 1, n)
+        cnt = ne - ns
         ax = sum(d[j][0] for j in range(ns, ne)) / cnt; ay = sum(ly[j] for j in range(ns, ne)) / cnt
         best, area = s, -1.0
         for j in range(s, e):
@@ -449,7 +518,7 @@ def build(clean, out, built=None):
             notes.insert(0, 'Upper limits, not measured cross sections.')
         orig = len(data)
         full_x = [p[0] for p in data]; full_y = [p[1] for p in data]
-        data = [[round(l, 4), sig(s)] for l, s in resample(data)]
+        data = [[round(l, 4), sig(s)] for l, s in resample(data, max_points(orig))]
         f = r.get('species_canonical') or r['species']; k = key_of(f)
         sp = species.setdefault(k, {'k': k, 'f': f, 'n': r.get('name') or '', 'cas': r.get('cas') or '', 'sets': []})
         if not sp['n'] and r.get('name'): sp['n'] = r['name']
@@ -510,7 +579,7 @@ def build(clean, out, built=None):
             json.dump(data, fh, separators=(',', ':'))
         total += os.path.getsize(p)
     used = sorted({s['src'] for sp in species.values() for s in sp['sets']})
-    index = {'meta': {'built': built, 'archive': archive_date(idx), 'max_points': MAX_POINTS,
+    index = {'meta': {'built': built, 'archive': archive_date(idx), 'max_points': BIG_POINTS,
                       'sources': {k: SOURCES.get(k, {'short': k, 'name': k}) for k in used}, 'skipped': skipped, 'skipped_why': why},
              'species': sorted(species.values(), key=lambda s: (-len(s['sets']), s['f']))}
     with open(os.path.join(out, 'index.json'), 'w', encoding='utf-8') as fh:

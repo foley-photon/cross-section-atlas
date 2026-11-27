@@ -92,7 +92,7 @@ class Build(unittest.TestCase):
 
     def test_meta(self):
         m = self.index['meta']
-        self.assertEqual((m['built'], m['archive'], m['max_points']), ('2026-11-11', '2026-11-07', 2000))
+        self.assertEqual((m['built'], m['archive'], m['max_points']), ('2026-11-11', '2026-11-07', B.BIG_POINTS))
         self.assertEqual(sorted(m['sources']), ['bremen', 'cfa', 'mainz2013', 'tuvx'])
         self.assertEqual(m['sources']['mainz2013']['license'], 'CC BY 4.0 (Zenodo record).')
 
@@ -306,11 +306,16 @@ class Build(unittest.TestCase):
         d = wavy(7321, a=120.0, h=0.0137)
         for i in range(0, len(d), 97):
             d[i][1] *= 1 + (i % 7) / 3                       # some structure on top
+        # and a spectrum with a dense stretch between two sparse ones, where the buckets follow the cells in log λ
+        e = [[10 + 0.5 * i, 1e-17 * (1 + 0.5 * math.sin(i / 9))] for i in range(161)]
+        e += [[90.8 + i * 17.9 / 29999, 1e-19 + 1e-16 * math.sin(math.pi * (90.8 + i * 17.9 / 29999) / 0.02) ** 8] for i in range(30000)]
+        e += [[108.75 + 0.25 * i, 1e-21 + 1.5e-17 * math.exp(-((108.75 + 0.25 * i - 115) / 0.4) ** 2 / 2)] for i in range(232)]
         js = ("import * as X from './site/js/xsec.js'; let s=''; process.stdin.on('data', (c) => s += c);"
               "process.stdin.on('end', () => process.stdout.write(JSON.stringify(X.resample(JSON.parse(s), 2000))));")
-        r = subprocess.run([NODE, '--input-type=module', '-e', js], input=json.dumps(d), capture_output=True, text=True, cwd=str(ROOT))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout), B.resample(d, 2000))
+        for case in (d, e):
+            r = subprocess.run([NODE, '--input-type=module', '-e', js], input=json.dumps(case), capture_output=True, text=True, cwd=str(ROOT))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout), B.resample(case, 2000))
 
 
 RULES = [

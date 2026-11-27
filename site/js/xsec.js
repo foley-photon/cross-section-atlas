@@ -89,19 +89,56 @@ export function sigmaLine(d, x, fwhm = 0) {
     return { sigma: den > 0 ? num / den : null, covered: Math.min(1, den / total), points: inside, coarse: step != null && step > fwhm };
 }
 /**
- * Resample a spectrum to at most `max` points while keeping its shape: points are kept where the curve bends
- * (largest-triangle style on log σ), and the first and last point always. Returns a new array.
+ * The max − 2 buckets [[start, end), ...] (index ranges) between the first and the last point of a spectrum with the
+ * sorted wavelengths xs, for thinning to max points. The range is cut into ⌊max/4⌋ cells of equal width in log λ (in λ
+ * where λ ≤ 0 occurs), and no bucket straddles two cells. Half of the buckets go out evenly (the same number for every
+ * cell with points, or one per point where it has fewer), the other half in proportion to the points the cells have
+ * beyond those. So a dense, line-resolved stretch cannot take the whole budget and leave a sparse one empty: every
+ * cell with data keeps a point, and two kept points are never further apart than the widest gap of the data between
+ * them plus two cell widths. The same as thin_buckets() in scripts/build_data.py.
+ */
+export function thinBuckets(xs, max) {
+    const n = xs.length; const m = max - 2; const ncell = Math.max(1, Math.floor(max / 4));
+    const lo = xs[0]; const hi = xs[n - 1];
+    const f = lo > 0 ? Math.log : (x) => x;
+    const a = f(lo); const span = f(hi) - a;
+    const cells = []; let start = 1; let cur = -1;
+    for (let i = 1; i < n - 1; i++) {
+        const c = span > 0 ? Math.min(ncell - 1, Math.max(0, Math.trunc((f(xs[i]) - a) / span * ncell))) : 0;
+        if (c !== cur) { if (i > start) cells.push([start, i]); start = i; cur = c; }
+    }
+    if (n - 1 > start) cells.push([start, n - 1]);
+    const cnt = cells.map(([s, e]) => e - s);
+    const even = (v) => cnt.reduce((t, c) => t + Math.min(c, v), 0);
+    let lv = 1; let hv = cnt.reduce((t, c) => Math.max(t, c), 1);
+    while (lv < hv) { const mid = Math.floor((lv + hv + 1) / 2); if (even(mid) <= Math.floor(m / 2)) lv = mid; else hv = mid - 1; }
+    const take = cnt.map((c) => Math.min(c, lv));
+    const used = take.reduce((t, x) => t + x, 0);
+    let left = m - used; const rest = n - 2 - used;
+    const more = cnt.map((c, k) => (rest > 0 ? Math.floor(left * (c - take[k]) / rest) : 0));
+    for (let k = 0; k < cnt.length; k++) { take[k] += more[k]; left -= more[k]; }
+    for (let k = 0; k < cnt.length && left > 0; k++) if (take[k] < cnt[k]) { take[k]++; left--; }
+    const out = [];
+    cells.forEach(([s, e], k) => { const c = e - s; for (let j = 0; j < take[k]; j++) out.push([s + Math.floor(j * c / take[k]), s + Math.floor((j + 1) * c / take[k])]); });
+    return out;
+}
+
+/**
+ * Resample a spectrum to at most `max` points while keeping its shape: the first and last point, and in each bucket
+ * (thinBuckets) the point that spans the largest triangle (λ, log σ) with the point kept before it and the mean of the
+ * next bucket, so peaks, band heads and the valleys between them are kept in every stretch of the range that has data.
+ * Returns a new array. The same algorithm as resample() in scripts/build_data.py.
  */
 export function resample(d, max = 2000) {
     if (d.length <= max) return d.slice();
     const out = [d[0]];
-    const bucket = (d.length - 2) / (max - 2);
     const ly = (p) => Math.log10(Math.max(p[1], 1e-40));
+    const buckets = thinBuckets(d.map((p) => p[0]), max);
     let a = 0;
-    for (let i = 0; i < max - 2; i++) {
-        const s = Math.floor(i * bucket) + 1; const e = Math.min(Math.floor((i + 1) * bucket) + 1, d.length - 1);
-        const ns = Math.min(Math.floor((i + 1) * bucket) + 1, d.length - 1); const ne = Math.min(Math.floor((i + 2) * bucket) + 1, d.length);
-        let ax = 0; let ay = 0; const cnt = Math.max(1, ne - ns);
+    for (let i = 0; i < buckets.length; i++) {
+        const [s, e] = buckets[i];
+        const [ns, ne] = i + 1 < buckets.length ? buckets[i + 1] : [d.length - 1, d.length];
+        let ax = 0; let ay = 0; const cnt = ne - ns;
         for (let j = ns; j < ne; j++) { ax += d[j][0]; ay += ly(d[j]); }
         ax /= cnt; ay /= cnt;
         let best = s; let area = -1;
@@ -166,6 +203,59 @@ export const LASER_LINES = Object.freeze([
 ]);
 /** The lines whose labels the plot keeps first where the marked lines crowd: the most used ones. */
 export const LINE_RANK = Object.freeze([248.4, 193.3, 266, 532.1, 354.7, 308, 157.6, 121.567, 212.8, 351.1, 222, 405, 118.2]);
+
+/* ── Several photons ───────────────────────────────────────────────────── */
+// n photons of wavelength λ carry the energy of one photon of λ/n, where λ is the vacuum wavelength: photon energy is
+// hc/λ_vac. An air wavelength is converted to vacuum first, then divided. The one-photon spectrum at λ/n shows which
+// excited states lie at that energy (where an n-photon resonance can occur); it is not an n-photon cross section.
+
+/**
+ * Refractive index of standard air (15 °C, 101.325 kPa, dry, 330 ppm CO₂) at a vacuum wavelength in nm, from Peck and
+ * Reeder, J. Opt. Soc. Am. 62, 958 (1972), the formula NIST's Atomic Spectra Database and the site's REMPI Schemes page
+ * use (σ = 1000/λ in µm⁻¹). It holds from 185 to 1700 nm, the range of their fit; null below 185 nm.
+ */
+export function airIndex(nmVac) {
+    if (!(nmVac >= 185)) return null;
+    const s2 = (1e3 / nmVac) ** 2;
+    return 1 + (8060.51 + 2480990 / (132.274 - s2) + 17455.7 / (39.32957 - s2)) * 1e-8;
+}
+/** The vacuum wavelength (nm) of a wavelength in standard air: λ_vac = n(λ_vac) λ_air, by iteration. null outside 185–1700 nm. */
+export function airToVacuum(nmAir) {
+    if (!(nmAir >= 185 && nmAir <= 1700)) return null;
+    let v = nmAir;
+    for (let i = 0; i < 6; i++) v = nmAir * airIndex(v);
+    return v;
+}
+/** The wavelength in standard air (nm) of a vacuum wavelength: λ_vac/n; null outside 185–1700 nm. */
+export const vacuumToAir = (nmVac) => (nmVac >= 185 && nmVac <= 1700 ? nmVac / airIndex(nmVac) : null);
+/**
+ * By default a typed laser line from AIR_FROM_NM to AIR_TO_NM is read as an air wavelength, and one outside that range
+ * as a vacuum wavelength: the convention of NIST's Atomic Spectra Database, which lists air wavelengths from 200 to
+ * 2000 nm. From 1700 to 2000 nm the air formula does not hold, so such a line is read as vacuum and the page says so.
+ */
+export const AIR_FROM_NM = 200;
+export const AIR_TO_NM = 2000;
+/** The numbers of photons the page offers. */
+export const PHOTONS = Object.freeze([1, 2, 3]);
+/**
+ * n photons of a laser line at `nm`: { n, nm (as typed), air (the line was read as an air wavelength and converted),
+ * vac (its vacuum wavelength), target (vac/n: the vacuum wavelength of one photon with the energy of all n), cm1 and eV
+ * (that energy), outside (an air wavelength was asked for where the air formula does not hold, so the value was read
+ * as vacuum) }. scale: 'air', 'vac', or '' for the convention (air from AIR_FROM_NM to AIR_TO_NM, vacuum outside).
+ * null for a wavelength that is not positive or a number of photons not in PHOTONS.
+ */
+export function multiphoton(nm, n = 1, scale = '') {
+    if (!(nm > 0) || !PHOTONS.includes(n)) return null;
+    const wantAir = scale === 'air' || (scale !== 'vac' && nm >= AIR_FROM_NM && nm <= AIR_TO_NM);
+    const v = wantAir ? airToVacuum(nm) : null;
+    const vac = v ?? nm;
+    return { n, nm, air: v != null, vac, target: vac / n, cm1: (n * 1e7) / vac, eV: n * nmToEV(vac), outside: wantAir && v == null };
+}
+/** A computed wavelength in nm as the page writes it: d decimals (2 by default), trailing zeros dropped: 115.04, 115. */
+export function nmText(nm, d = 2) {
+    if (!(nm > 0)) return '';
+    return String(+nm.toFixed(d));
+}
 
 /* ── What the page shows ───────────────────────────────────────────────── */
 // The steps between the form and the numbers on the page, kept here so that the tests and the site's check cover them.
@@ -329,6 +419,65 @@ export const AIR_GASES = Object.freeze(['N2', 'O2', 'H2O', 'CO2', 'CH4', 'H2', '
 export function lineKey(nm) {
     const L = LASER_LINES.find((l) => l.nm === nm);
     return L ? String(L.nm) : null;
+}
+/**
+ * The key of the preset line within `tol` nm of a computed wavelength (λ/n of several photons: two photons of
+ * 243.134 nm in vacuum land on Lyman-α, 121.567 nm), or null.
+ */
+export function lineKeyNear(nm, tol = 0.001) {
+    const L = nm > 0 ? LASER_LINES.find((l) => Math.abs(l.nm - nm) <= tol) : null;
+    return L ? String(L.nm) : null;
+}
+
+/* ── Where a molecule has no data ──────────────────────────────────────── */
+/**
+ * Where a molecule's datasets ([{ id, l: [from, to] (nm), np (points shipped) }]) stand against a wavelength: null
+ * when one of them covers it; otherwise { nm, below (the longest wavelength any dataset reaches below nm, or null),
+ * above (the shortest wavelength any dataset starts at above nm, or null) }. null too for no datasets or no
+ * wavelength: there is nothing to say then. A dataset covers from ≤ nm ≤ to; one that tableValue() reads point by
+ * point (fewer than 3 points, or a list of band maxima, isPeakList) covers 1 nm more at each end, the allowance within
+ * which tableValue() gives its nearest point.
+ */
+export function coverage(sets, nm) {
+    if (!(nm > 0) || !Array.isArray(sets) || !sets.length) return null;
+    let below = null; let above = null;
+    for (const x of sets) {
+        const [a, b] = x.l || [];
+        if (!(a > 0 && b > 0)) continue;
+        const tol = a === b || x.np < 3 || isPeakList(x) ? 1 : 0;
+        if (a - tol <= nm && nm <= b + tol) return null;
+        if (b < nm && (below == null || b > below)) below = b;
+        if (a > nm && (above == null || a < above)) above = a;
+    }
+    return below == null && above == null ? null : { nm, below, above };
+}
+/**
+ * Notes on single molecules for the line that says no dataset reaches a wavelength, { key: [{ from, to, text }] }
+ * (nm, vacuum; plain text). Only what the molecule's own constants show.
+ * CO: the band origins ν₀₀ of Huber and Herzberg, Constants of Diatomic Molecules (1979), as the NIST Chemistry WebBook
+ * lists them: a ³Π ← X 48473.22 cm⁻¹ (206.30 nm; a ³Π is the lowest excited state), A ¹Π ← X 64748.48 cm⁻¹ (154.44 nm).
+ * Between them lie only weak forbidden bands: I ¹Σ⁻ ← X at 154.9 nm and the spin-forbidden bands to the triplet states
+ * a′ ³Σ⁺, d ³Δ, e ³Σ⁻ and a ³Π. The five collections' CO tables end at 166.55 nm.
+ */
+export const RANGE_NOTES = Object.freeze({
+    CO: Object.freeze([Object.freeze({ from: 166.55, to: Infinity, text: 'CO’s first allowed band system, A ¹Π ← X (the fourth positive system), starts at 154.4 nm. At longer wavelengths CO absorbs from its ground state only in weak forbidden bands: the I ¹Σ⁻ ← X band at 154.9 nm and the spin-forbidden bands to its triplet states (a′ ³Σ⁺, d ³Δ, e ³Σ⁻ and the Cameron bands, a ³Π ← X, whose (0,0) band is at 206.3 nm). None of the five collections tabulates them past 166.6 nm.' })]),
+});
+/**
+ * The plain-language line for a wavelength no dataset of a molecule reaches. name: the molecule as it should appear
+ * (HTML allowed, inserted as given); k: its species key (for RANGE_NOTES); nm: the wavelength; cov: coverage(); n: the
+ * number of photons the page is set to (the hint to set 2 or 3 appears only for one photon and a wavelength longer
+ * than every table); at: the wavelength as text ('230', '115.04'). '' when cov is null.
+ */
+export function noDataText(name, k, nm, cov, n = 1, at = String(nm)) {
+    if (!cov) return '';
+    const end = (x) => nmText(x, 1);
+    const first = cov.above == null ? `No dataset for ${name} reaches ${at} nm; its tables end at ${end(cov.below)} nm.`
+        : cov.below == null ? `No dataset for ${name} reaches ${at} nm; its tables start at ${end(cov.above)} nm.`
+            : `No dataset for ${name} covers ${at} nm; its tables stop at ${end(cov.below)} nm and start again at ${end(cov.above)} nm.`;
+    const notes = (RANGE_NOTES[k] || []).filter((r) => nm > r.from && nm <= r.to).map((r) => r.text);
+    const generic = notes.length ? '' : ' Outside their range the five collections hold no value for it, which is not the same as no absorption.';
+    const multi = n === 1 && cov.above == null ? ' For a multiphoton scheme, set Photons absorbed to 2 or 3.' : '';
+    return `${first}${generic}${notes.map((t) => ` ${t}`).join('')}${multi}`;
 }
 const whoRow = (sets, f, sigma, extra) => {
     const s = sets[f]; if (!s) return null;
